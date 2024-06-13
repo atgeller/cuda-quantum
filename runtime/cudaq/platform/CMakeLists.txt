@@ -7,6 +7,7 @@
 # ============================================================================ #
 
 add_subdirectory(default)
+add_subdirectory(test)
 if (OPENSSL_FOUND)
   add_subdirectory(orca)
 endif()
