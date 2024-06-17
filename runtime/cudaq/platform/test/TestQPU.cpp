@@ -58,31 +58,14 @@
 #include <sys/types.h>
 
 namespace cudaq::test {
-cudaq::sample_result sample(std::vector<double> &bs_angles,
-                            std::vector<double> &ps_angles,
-                            std::vector<std::size_t> &input_state,
-                            std::vector<std::size_t> &loop_lengths,
-                            int n_samples) {
-  cudaq::ExecutionContext context("sample", n_samples);
-  auto &platform = get_platform();
-  platform.set_exec_ctx(&context, 0);
-  cudaq::altLaunchKernel("test_launch", nullptr, nullptr,
-                         0, 0);
-
-  return context.result;
-}
 } // namespace cudaq::test
 
 using namespace mlir;
 
 namespace cudaq {
 
-/// @brief The OrcaRemoteRESTQPU is a subtype of QPU that enables the
-/// execution of CUDA-Q kernels on remotely hosted quantum computing
-/// services via a REST Client / Server interaction. This type is meant
-/// to be general enough to support any remotely hosted service.
-/// Moreover, this QPU handles launching kernels under the Execution Context
-/// that includs sampling via synchronous client invocations.
+/// @brief The TestQPU is a sort of dummy target for customizing
+/// the compiler pipeline and performing resource estimation
 class TestQPU : public cudaq::QPU {
 protected:
   /// @brief The Pass pipeline string, configured by the
@@ -133,9 +116,13 @@ public:
 
   void enqueue(cudaq::QuantumTask&) override {}
 
-  void setExecutionContext(cudaq::ExecutionContext*) override {}
+  void setExecutionContext(cudaq::ExecutionContext* ec) override {
+    executionContext = ec;
+  }
 
-  void resetExecutionContext() override {}
+  void resetExecutionContext() override {
+    executionContext = nullptr;
+  }
 
   /// @brief Helper function to get boolean environment variable
   bool getEnvBool(const char *envName, bool defaultVal = false) {
@@ -286,12 +273,7 @@ void TestQPU::launchKernel(const std::string &kernelName,
                                      void (*kernelFunc)(void *), void *args,
                                      std::uint64_t voidStarSize,
                                      std::uint64_t resultOffset) {
-  cudaq::info("launching Test remote rest kernel ({})", kernelName);
-
-  // TODO future iterations of this should support non-void return types.
-  if (!executionContext)
-    throw std::runtime_error("Remote rest execution can only be performed "
-                             "via cudaq::sample() or cudaq::observe().");
+  cudaq::info("launching Test kernel ({})", kernelName);
 
   auto [m_module, contextPtr, updatedArgs] =
         extractQuakeCodeAndContext(kernelName, args);

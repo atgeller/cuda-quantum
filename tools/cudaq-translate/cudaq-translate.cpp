@@ -162,6 +162,7 @@ int main(int argc, char **argv) {
   };
 
   llvm::StringSwitch<std::function<void()>>(convertTo)
+      .Case("test", [&]() { cudaq::opt::addPipelineTest(pm); })
       .Case("qir", [&]() { cudaq::opt::addPipelineConvertToQIR(pm); })
       .Cases("qir-adaptive", "qir-base",
              [&]() {

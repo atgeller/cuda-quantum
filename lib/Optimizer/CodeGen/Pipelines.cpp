@@ -53,3 +53,23 @@ void cudaq::opt::addPipelineTranslateToIQMJson(PassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 }
+
+void cudaq::opt::addPipelineTest(PassManager &pm) {
+  pm.getContext()->disableMultithreading();
+  pm.enableIRPrinting();
+  pm.addNestedPass<func::FuncOp>(createApplyControlNegations());
+  addAggressiveEarlyInlining(pm);
+  pm.addPass(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createUnwindLoweringPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createQuakeAddDeallocs());
+  pm.addNestedPass<func::FuncOp>(createQuakeAddMetadata());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createLowerToCFGPass());
+  pm.addNestedPass<func::FuncOp>(createCombineQuantumAllocations());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createConvertToQIR());
+}
