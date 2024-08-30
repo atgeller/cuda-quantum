@@ -582,7 +582,7 @@ public:
   ///
   /// This function should only be called on DependencyNodes where
   /// `isContainer()` is true.
-  virtual void contractAllocsPass() {
+  virtual void contractAllocsPass(unsigned &next_qid) {
     assert(false &&
            "contractAllocPass can only be called on an IfDependencyNode");
   }
@@ -595,7 +595,7 @@ public:
   /// this node is the first and last use of the virtual wire in the parent
   /// scope.
   virtual void lowerAlloc(DependencyNode *init, DependencyNode *root,
-                          VirtualQID alloc) {
+                          VirtualQID alloc, unsigned &next_qid) {
     assert(false && "lowerAlloc can only be called on an IfDependencyNode");
   }
 
@@ -1548,9 +1548,9 @@ public:
   /// `if` in that block, can be moved inside the `if`.
   ///
   /// Works outside-in, to contract as tightly as possible.
-  void contractAllocsPass() {
+  void contractAllocsPass(unsigned &next_qid) {
     for (auto container : containers)
-      container->contractAllocsPass();
+      container->contractAllocsPass(next_qid);
   }
 
   /// Assigns a cycle to every quantum operation in each dependency graph
@@ -2096,7 +2096,7 @@ public:
   //       splitting wires per inner block, see
   //       targettests/execution/qubit_management_bug_qids.cpp for
   //       an example of how the current approach fails.
-  void contractAllocsPass() {
+  void contractAllocsPass(unsigned &next_qid) {
     // Look for contract-able allocations in this block
     for (auto alloc : getVirtualAllocs()) {
       auto first_use = graph->getFirstUseOfQID(alloc);
@@ -2106,7 +2106,7 @@ public:
         // Move alloc inside
         auto root = graph->getRootForQID(alloc);
         auto init = graph->getAllocForQID(alloc);
-        first_use->lowerAlloc(init, root, alloc);
+        first_use->lowerAlloc(init, root, alloc, next_qid);
         // Qid is no longer used in this block, remove related metadata
         graph->removeVirtualAlloc(alloc);
         graph->removeQID(alloc);
@@ -2114,7 +2114,7 @@ public:
     }
 
     // Outside-in, so recur only after applying pass to this block
-    graph->contractAllocsPass();
+    graph->contractAllocsPass(next_qid);
   }
 
   /// Moves an alloc/de-alloc pair for the virtual wire \p qid into this block,
@@ -2123,16 +2123,16 @@ public:
   // TODO: should take a new qid in addition to the old qid, so that
   //       the qid can be changed when splitting so uniqueness of qids can be
   //       maintained
-  void lowerAlloc(DependencyNode *init, DependencyNode *root, VirtualQID qid) {
+  void lowerAlloc(DependencyNode *init, DependencyNode *root, VirtualQID old_qid) {
     // No need to clean up existing terminator (hopefully)
-    graph->replaceLeafAndRoot(qid, init, root);
+    graph->replaceLeafAndRoot(old_qid, init, root);
     // Clean up old block argument
-    removeArgument(qid);
+    removeArgument(old_qid);
     // If the qid isn't actually used in the block, remove it
-    if (!graph->getFirstUseOfQID(qid)) {
+    if (!graph->getFirstUseOfQID(old_qid)) {
       // TODO: clean up init and root in this case
-      graph->removeVirtualAlloc(qid);
-      graph->removeQID(qid);
+      graph->removeVirtualAlloc(old_qid);
+      graph->removeQID(old_qid);
     }
   }
 
@@ -2555,24 +2555,27 @@ protected:
       //                                else_block->getTerminator());
     }
 
-    // Add virtual alloc to current scope
-    parent->replaceLeafAndRoot(lifted_alloc->getQID(), lifted_alloc,
-                               lifted_root);
     qids.insert(lifted_alloc->getQID());
     // Hook lifted_root to the relevant result wire from this
     this->successors.insert(lifted_root);
-    auto new_edge = DependencyEdge{this, results.size()};
-    new_edge.qid = lifted_alloc->getQID();
-    new_edge.qubit = lifted_alloc->getQubit();
-    lifted_root->dependencies.push_back(new_edge);
-    // Hook this to then_op by adding a new dependency for the lifted wire
-    DependencyEdge newEdge(lifted_alloc, 0);
-    dependencies.push_back(newEdge);
+    auto out_edge = DependencyEdge{this, results.size()};
+    out_edge.qid = lifted_alloc->getQID();
+    out_edge.qubit = lifted_alloc->getQubit();
+    lifted_root->dependencies.push_back(out_edge);
+    // Hook this to lifted_alloc by adding a new dependency for the lifted wire
+    DependencyEdge in_edge(lifted_alloc, 0);
+    in_edge.qid = lifted_alloc->getQID();
+    in_edge.qubit = lifted_alloc->getQubit();
+    dependencies.push_back(in_edge);
     // Add a corresponding result wire for the lifted wire which will flow
     // to lifted_root
-    results.push_back(newEdge.getValue().getType());
-    // Hook lifted_alloc to then_op
+    results.push_back(in_edge.getValue().getType());
+    // Hook lifted_alloc to this
     lifted_alloc->successors.insert(this);
+
+    // Add virtual alloc to current scope
+    parent->replaceLeafAndRoot(lifted_alloc->getQID(), lifted_alloc,
+                               lifted_root);
   }
 
   /// Combines physical allocations from the then and else branches
@@ -2669,9 +2672,9 @@ public:
     return qubits;
   }
 
-  void contractAllocsPass() override {
-    then_block->contractAllocsPass();
-    else_block->contractAllocsPass();
+  void contractAllocsPass(unsigned &next_qid) override {
+    then_block->contractAllocsPass(next_qid);
+    else_block->contractAllocsPass(next_qid);
   }
 
   /// Removes \p qid (and associated args/terminator dependencies)
@@ -2874,7 +2877,7 @@ public:
   /// As a result, removes the dependency on, and result for, \p qid from this
   /// node.
   void lowerAlloc(DependencyNode *init, DependencyNode *root,
-                  VirtualQID qid) override {
+                  VirtualQID qid, unsigned &next_qid) override {
     assert(successors.contains(root) && "Illegal root for contractAlloc");
     assert(init->successors.contains(this) && "Illegal init for contractAlloc");
     root->dependencies.erase(root->dependencies.begin());
@@ -2897,6 +2900,10 @@ public:
     dependencies.erase(dependencies.begin() + offset);
     then_block->lowerAlloc(alloc, root, qid);
     else_block->lowerAlloc(alloc_copy, dealloc_copy, qid);
+    if (else_block->getQIDs().contains(qid)) {
+      else_block->getBlockGraph()->updateQID(qid, next_qid++);
+    }
+    qids.remove(qid);
 
     // Since we're removing a result, update the result indices of successors
     for (auto successor : successors)
@@ -3244,11 +3251,13 @@ struct DependencyAnalysisPass
           continue;
         }
 
+        auto vallocs = engine.getNumVirtualAllocs();
+
         OpBuilder builder(func);
         LifeTimeAnalysis set;
         // First, move allocs in as deep as possible. This is outside-in, so it
         // is separated from the rest of the analysis passes.
-        body->contractAllocsPass();
+        body->contractAllocsPass(vallocs);
         // Next, do the scheduling, lifetime analysis/allocation, and lifting
         // passes inside-out
         body->performAnalysis(set);
