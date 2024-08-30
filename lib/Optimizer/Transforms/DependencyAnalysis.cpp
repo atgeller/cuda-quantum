@@ -44,12 +44,7 @@ namespace {
 /// `quake.borrow_wire`s. It represents a physical wire.
 typedef std::size_t PhysicalQID;
 
-// TODO: Unfortunately, `contractAllocsPass` will currently duplicate
-// VirtualQIDs in the then and else blocks of an if, so they are only
-// unique per path, not per program, which could lead to multiple
-// different wires with the same VirtualQID after lifting allocs.
-
-/// A `VirtualQID` is a (mostly) unique identifier for a virtual wire.
+/// A `VirtualQID` is a unique identifier for a virtual wire.
 /// It is a handy way to refer to a specific virtual wire.
 typedef std::size_t VirtualQID;
 
@@ -697,8 +692,10 @@ public:
     auto other_init = static_cast<InitDependencyNode *>(other);
 
     // Two allocations are equivalent if they represent the same physical qubit.
-    // TODO: if qids are made unique, this test can refer to qids if qubits are
-    // not yet assigned (or even pointer equivalence in the meantime).
+    // TODO: with qids now being unique, this test can refer to qids if qubits
+    // are not yet assigned (or even pointer equivalence in the meantime).
+    // However, since allocations are currently always lifted, it does not come
+    // up currently.
     return qubit && other_init->qubit && qubit == other_init->qubit;
   }
 
@@ -1159,9 +1156,7 @@ private:
   //       lifting allocations), and then a separate mechanism like here to get
   //       rid of the old leaf, and update the metadata (used for lowering
   //       allocations, to replace the block argument and terminator dependency
-  //       with an alloc and de-alloc respectively). This change would
-  //       additionally benefit from the TODO to make qids properly globally
-  //       unique.
+  //       with an alloc and de-alloc respectively).
   void replaceLeaf(VirtualQID old_qid, VirtualQID new_qid,
                    DependencyNode *new_leaf) {
     assert(new_leaf->isLeaf() && "Invalid leaf!");
@@ -2092,10 +2087,9 @@ public:
   /// inside the `if`.
   ///
   /// Works outside-in, to contract as tightly as possible.
-  // TODO: pass unique counter to use to generate unique qids when
-  //       splitting wires per inner block, see
-  //       targettests/execution/qubit_management_bug_qids.cpp for
-  //       an example of how the current approach fails.
+  ///
+  /// Assumes \p next_qid is a counter whose value is a VirtualQID
+  /// that is not already in use in the circuit.
   void contractAllocsPass(unsigned &next_qid) {
     // Look for contract-able allocations in this block
     for (auto alloc : getVirtualAllocs()) {
@@ -2517,6 +2511,7 @@ protected:
         lifted_alloc = then_alloc;
         lifted_root = then_root;
       }
+
       // lifted_alloc will be else_alloc if both blocks contain
       // the qubit, so the metadata for the then_block graph
       // will be updated correctly when replacing the alloc/dealloc
@@ -2876,8 +2871,8 @@ public:
   ///
   /// As a result, removes the dependency on, and result for, \p qid from this
   /// node.
-  void lowerAlloc(DependencyNode *init, DependencyNode *root,
-                  VirtualQID qid, unsigned &next_qid) override {
+  void lowerAlloc(DependencyNode *init, DependencyNode *root, VirtualQID qid,
+                  unsigned &next_qid) override {
     assert(successors.contains(root) && "Illegal root for contractAlloc");
     assert(init->successors.contains(this) && "Illegal init for contractAlloc");
     root->dependencies.erase(root->dependencies.begin());
@@ -2887,9 +2882,6 @@ public:
     auto alloc_copy = new InitDependencyNode(*alloc);
     auto dealloc = static_cast<RootDependencyNode *>(root);
     auto dealloc_copy = new RootDependencyNode(*dealloc);
-    // TODO: alloc_copy and dealloc_copy should be given a new unique QID
-    //       This should be updated in the else branch as well after lowering,
-    //       using alloc_copy->updateQID(alloc->getQID(), new_qid);
     std::size_t offset = getDependencyForQID(qid).value();
     associated->eraseOperand(offset);
 
@@ -2900,9 +2892,13 @@ public:
     dependencies.erase(dependencies.begin() + offset);
     then_block->lowerAlloc(alloc, root, qid);
     else_block->lowerAlloc(alloc_copy, dealloc_copy, qid);
-    if (else_block->getQIDs().contains(qid)) {
+
+    // If else_block actually uses the qid, update it using the unique qid
+    // counter next_qid to ensure uniqueness of the qid as we copy it from
+    // the then block to the else block.
+    // TODO: only really need to do this if both blocks contain the qid.
+    if (else_block->getQIDs().contains(qid))
       else_block->getBlockGraph()->updateQID(qid, next_qid++);
-    }
     qids.remove(qid);
 
     // Since we're removing a result, update the result indices of successors
