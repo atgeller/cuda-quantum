@@ -2114,19 +2114,16 @@ public:
   /// Moves an alloc/de-alloc pair for the virtual wire \p qid into this block,
   /// Replacing the existing block argument and terminator dependencies for the
   /// wire.
-  // TODO: should take a new qid in addition to the old qid, so that
-  //       the qid can be changed when splitting so uniqueness of qids can be
-  //       maintained
-  void lowerAlloc(DependencyNode *init, DependencyNode *root, VirtualQID old_qid) {
+  void lowerAlloc(DependencyNode *init, DependencyNode *root, VirtualQID qid) {
     // No need to clean up existing terminator (hopefully)
-    graph->replaceLeafAndRoot(old_qid, init, root);
+    graph->replaceLeafAndRoot(qid, init, root);
     // Clean up old block argument
-    removeArgument(old_qid);
+    removeArgument(qid);
     // If the qid isn't actually used in the block, remove it
-    if (!graph->getFirstUseOfQID(old_qid)) {
+    if (!graph->getFirstUseOfQID(qid)) {
       // TODO: clean up init and root in this case
-      graph->removeVirtualAlloc(old_qid);
-      graph->removeQID(old_qid);
+      graph->removeVirtualAlloc(qid);
+      graph->removeQID(qid);
     }
   }
 
@@ -2531,23 +2528,22 @@ protected:
 
     if (!then_contains) {
       auto new_arg = then_block->addArgument(DependencyEdge{lifted_alloc, 0});
-      then_block->getTerminator()->dependencies.push_back(
-          DependencyEdge{new_arg, 0});
-      // TODO: Should add the qid to the terminator and graph properly here
-      //       although in theory it should never be used.
-      //       I think the following should do it.
-      // then_graph->replaceLeafAndRoot(lifted_alloc->getQID(), new_arg,
-      //                                then_block->getTerminator());
+      auto terminator = then_block->getTerminator();
+      terminator->dependencies.push_back(DependencyEdge{new_arg, 0});
+      terminator->qids.insert(lifted_alloc->getQID());
+      new_arg->successors.insert(terminator);
+      then_graph->replaceLeafAndRoot(lifted_alloc->getQID(), new_arg,
+                                     terminator);
     }
 
     if (!else_contains) {
       auto new_arg = else_block->addArgument(DependencyEdge{lifted_alloc, 0});
-      else_block->getTerminator()->dependencies.push_back(
-          DependencyEdge{new_arg, 0});
-      // TODO: Should add the qid to the terminator and graph properly here
-      //       although in theory it should never be used.
-      // else_graph->replaceLeafAndRoot(lifted_alloc->getQID(), new_arg,
-      //                                else_block->getTerminator());
+      auto terminator = else_block->getTerminator();
+      terminator->dependencies.push_back(DependencyEdge{new_arg, 0});
+      terminator->qids.insert(lifted_alloc->getQID());
+      new_arg->successors.insert(terminator);
+      else_graph->replaceLeafAndRoot(lifted_alloc->getQID(), new_arg,
+                                     terminator);
     }
 
     qids.insert(lifted_alloc->getQID());
