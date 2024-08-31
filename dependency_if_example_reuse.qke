@@ -1,0 +1,27 @@
+// ========================================================================== //
+// Copyright (c) 2022 - 2024 NVIDIA Corporation & Affiliates.                 //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+func.func @test() -> !quake.measure attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+  %true = arith.constant true
+  %0 = quake.null_wire
+  %1 = quake.null_wire
+  %2 = quake.h %0 : (!quake.wire) -> !quake.wire
+  %3:2 = cc.if(%true) ((%arg1 = %2, %arg2 = %1)) -> (!quake.wire, !quake.wire) {
+    %4 = quake.y %arg2 : (!quake.wire) -> !quake.wire
+    %5:2 = quake.x [%4] %arg1 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+    cc.continue %5#1, %5#0: !quake.wire, !quake.wire
+  } else {
+    %4 = quake.z %arg2 : (!quake.wire) -> !quake.wire
+    %5:2 = quake.x [%4] %arg1 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+    cc.continue %5#1, %5#0: !quake.wire, !quake.wire
+  }
+  %measOut, %wires = quake.mz %3#0 : (!quake.wire) -> (!quake.measure, !quake.wire)
+  quake.sink %wires : !quake.wire
+  quake.sink %3#1 : !quake.wire
+  return %measOut : !quake.measure
+}

@@ -1,0 +1,380 @@
+// ========================================================================== //
+// Copyright (c) 2022 - 2024 NVIDIA Corporation & Affiliates.                 //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+// func.func @test() {
+//   %0 = quake.null_wire
+//   %1 = quake.null_wire
+//   %2 = quake.null_wire
+//   %3 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %3 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %4 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %5:3 = cc.if(%4) ((%arg1 = %wires, %arg2 = %1, %arg3 = %2)) -> (!quake.wire, !quake.wire, !quake.wire) {
+//     %6 = quake.x %arg1 : (!quake.wire) -> !quake.wire
+//     %7 = quake.h %arg2 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %7 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %6, %wires_1, %arg3 : !quake.wire, !quake.wire, !quake.wire
+//   } else {
+//     %6 = quake.h %arg3 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %arg1, %arg2, %wires_1 : !quake.wire, !quake.wire, !quake.wire
+//   }
+//   %6 = quake.h %5#0 : (!quake.wire) -> !quake.wire
+//   quake.sink %6 : !quake.wire
+//   quake.sink %5#2 : !quake.wire
+//   quake.sink %5#1 : !quake.wire
+//   return
+// }
+
+// func.func @test() {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %3 = cc.if(%2) ((%arg1 = %wires)) -> (!quake.wire) {
+//     %4 = quake.null_wire
+//     %5 = quake.x %arg1 : (!quake.wire) -> !quake.wire
+//     %6 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %5 : !quake.wire
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %arg1: !quake.wire
+//   }
+//   %4 = quake.h %3 : (!quake.wire) -> !quake.wire
+//   quake.sink %4 : !quake.wire
+//   return
+// }
+
+// func.func @test() {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %20 = quake.null_wire
+//   %21 = quake.h %20 : (!quake.wire) -> !quake.wire
+//   %22 = quake.h %21 : (!quake.wire) -> !quake.wire
+//   %23 = quake.h %22 : (!quake.wire) -> !quake.wire
+//   %24 = quake.h %23 : (!quake.wire) -> !quake.wire
+//   %25 = quake.h %24 : (!quake.wire) -> !quake.wire
+//   quake.sink %25 : !quake.wire
+//   cc.if(%2) {
+//     %4 = quake.null_wire
+//     %6 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue
+//   }
+//   // quake.null_wire
+//   //%4 = quake.h %3 : (!quake.wire) -> !quake.wire
+//   quake.sink %wires : !quake.wire
+//   return
+// }
+
+// func.func @test() {
+//   %cst_0 = arith.constant 2.000000e+00 : f64
+//   %cst_1 = arith.constant 2.000000e+00 : f64
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %3 = quake.null_wire
+//   %4 = quake.h %3 : (!quake.wire) -> !quake.wire
+//   %5 = cc.if(%2) ((%arg1 = %4)) -> (!quake.wire) {
+//     %6 = quake.rx (%cst_0) %arg1 : (f64, !quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %wires_1 : !quake.wire
+//   } else {
+//     %6 = quake.rx (%cst_1) %arg1 : (f64, !quake.wire) -> !quake.wire
+//     %7 = quake.y %6 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %7 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %wires_1 : !quake.wire
+//   }
+//   // quake.null_wire
+//   //%4 = quake.h %3 : (!quake.wire) -> !quake.wire
+//   quake.sink %5 : !quake.wire
+//   quake.sink %wires : !quake.wire
+//   return
+// }
+
+// func.func @test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %1 = quake.null_wire
+//   %2:2 = quake.x [%0] %1 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+//   %measOut, %wires = quake.mz %2#0 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %3 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %4 = cc.if(%3) ((%arg1 = %2#1)) -> (!quake.wire) {
+//     %true = arith.constant true
+//     %5 = cc.if(%true) ((%arg2 = %arg1)) -> (!quake.wire) {
+//       %6 = quake.y %arg2 : (!quake.wire) -> !quake.wire
+//       cc.continue %6 : !quake.wire
+//     } else {
+//       %6 = quake.y %arg2 : (!quake.wire) -> !quake.wire
+//       cc.continue %6 : !quake.wire
+//     }
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %wires_1 : !quake.wire
+//   } else {
+//     %5 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+//     %6 = quake.z %5 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     cc.continue %wires_1 : !quake.wire
+//   }
+//   %measOut_1, %wires_1 = quake.mz %4 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %5 = quake.discriminate %measOut_1 : (!quake.measure) -> i1
+//   quake.sink %wires_1 : !quake.wire
+//   quake.sink %wires : !quake.wire
+//   return %5 : i1
+// }
+
+// func.func @test() {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   cc.if(%2) {
+//     %4 = quake.null_wire
+//     %6 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %6 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue
+//   }
+//   quake.sink %wires : !quake.wire
+//   return
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %3 = cc.if(%2) -> i1 {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %6 : i1
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %6 : i1
+//   }
+//   quake.sink %wires : !quake.wire
+//   return %3 : i1
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %3 = cc.if(%2) -> i1 {
+//     %4 = quake.null_wire
+//     %5 = quake.h %4 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %6 : i1
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.null_wire
+//     %6:2 = quake.x [%5] %4 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+//     %measOut_0, %wires_1 = quake.mz %6#1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %7 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     quake.sink %6#0 : !quake.wire
+//     cc.continue %7 : i1
+//   }
+//   quake.sink %wires : !quake.wire
+//   return %3 : i1
+// }
+
+// func.func @test() attributes {"cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %1 = quake.null_wire
+//   %2 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %2 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %3 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %4:2 = cc.if(%3) ((%arg1 = %1, %arg2 = %wires)) -> (!quake.wire, !quake.wire)  {
+//     %4 = quake.h %arg1 : (!quake.wire) -> !quake.wire
+//     %5:2 = quake.x [%4] %arg2 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire) 
+//     cc.continue %5#0, %5#1 : !quake.wire, !quake.wire
+//   } else {
+//     %4 = quake.h %arg1 : (!quake.wire) -> !quake.wire
+//     %5:2 = quake.x [%4] %arg2 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire) 
+//     cc.continue %5#0, %5#1 : !quake.wire, !quake.wire
+//   }
+//   quake.sink %4#0 : !quake.wire
+//   quake.sink %4#1 : !quake.wire
+//   return
+// }
+
+// func.func @test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %2 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %2 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %3 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %4 = cc.if(%3) ((%arg1 = %wires)) -> !quake.wire  {
+//     %4 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     cc.continue %5 : !quake.wire
+//   } else {
+//     %4 = quake.h %arg1 : (!quake.wire) -> !quake.wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     cc.continue %5 : !quake.wire
+//   }
+//   %measOut_1, %wires_1 = quake.mz %4 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %5 = quake.discriminate %measOut_1 : (!quake.measure) -> i1
+//   quake.sink %wires_1 : !quake.wire
+//   return %5 : i1
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %1 = quake.h %0 : (!quake.wire) -> !quake.wire
+//   %measOut, %wires = quake.mz %1 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   %3 = cc.if(%2) -> i1 {
+//     %4 = quake.null_wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     %20 = quake.y %5 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %20 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %6 : i1
+//   } else {
+//     %4 = quake.null_wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     %20 = quake.z %5 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %20 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     quake.sink %wires_1 : !quake.wire
+//     cc.continue %6 : i1
+//   }
+//   %4 = quake.h %wires : (!quake.wire) -> !quake.wire
+//   quake.sink %4 : !quake.wire
+//   return %3 : i1
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = arith.constant true
+//   %1 = quake.null_wire
+//   %3:2 = cc.if(%0) ((%arg0 = %1)) -> (i1, !quake.wire) {
+//     %5 = quake.h %arg0 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     cc.continue %6, %wires_1 : i1, !quake.wire
+//   } else {
+//     %5 = quake.h %arg0 : (!quake.wire) -> !quake.wire
+//     %measOut_0, %wires_1 = quake.mz %5 : (!quake.wire) -> (!quake.measure, !quake.wire)
+//     %6 = quake.discriminate %measOut_0 : (!quake.measure) -> i1
+//     cc.continue %6, %wires_1 : i1, !quake.wire
+//   }
+//   quake.sink %3#1 : !quake.wire
+//   return %3#0 : i1
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %cst = arith.constant 1.000000e+00 : f64
+//   %true = arith.constant true
+//   %1 = quake.null_wire
+//   %2 = cc.if(%true) ((%arg0 = %1)) -> !quake.wire {
+//     %4 = quake.rx (%cst) %arg0 : (f64, !quake.wire) -> !quake.wire
+//     %5 = quake.z %4 : (!quake.wire) -> !quake.wire
+//     %6 = quake.rx (%cst) %5 : (f64, !quake.wire) -> !quake.wire
+//     cc.continue %6 : !quake.wire
+//   } else {
+//     %4 = quake.y %arg0 : (!quake.wire) -> !quake.wire
+//     %5 = quake.rx (%cst) %4 : (f64, !quake.wire) -> !quake.wire
+//     cc.continue %5 : !quake.wire
+//   }
+//   %measOut, %wires = quake.mz %2 name "res" : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %3 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   quake.sink %wires : !quake.wire
+//   return %3 : i1
+// }
+
+// func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %cst = arith.constant 1.000000e+00 : f64
+//   %true = arith.constant true
+//   %0 = quake.null_wire
+//   %1 = cc.if(%true) ((%arg0 = %0)) -> !quake.wire {
+//     %3 = quake.rx (%cst) %arg0 : (f64, !quake.wire) -> !quake.wire
+//     %4 = quake.z %3 : (!quake.wire) -> !quake.wire
+//     %5 = quake.rx (%cst) %4 : (f64, !quake.wire) -> !quake.wire
+//     cc.continue %5 : !quake.wire
+//   } else {
+//     %3 = quake.ry (%cst) %arg0 : (f64, !quake.wire) -> !quake.wire
+//     %4 = quake.y %3 : (!quake.wire) -> !quake.wire
+//     cc.continue %4 : !quake.wire
+//   }
+//   %measOut, %wires = quake.mz %1 name "res" : (!quake.wire) -> (!quake.measure, !quake.wire)
+//   %2 = quake.discriminate %measOut : (!quake.measure) -> i1
+//   quake.sink %wires : !quake.wire
+//   return %2 : i1
+// }
+
+// func.func @test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+//   %0 = quake.null_wire
+//   %true = arith.constant true
+//   %4:2 = cc.if(%true) ((%arg1 = %0)) -> (i1, !quake.wire) {
+//     %4 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     cc.continue %true, %5 : i1, !quake.wire
+//   } else {
+//     %4 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+//     %5 = quake.x %4 : (!quake.wire) -> !quake.wire
+//     cc.continue %true, %5 : i1, !quake.wire
+//   }
+//   quake.sink %4#1 : !quake.wire
+//   return %4#0 : i1
+// }
+
+func.func @__nvqpp__mlirgen__run_test() -> i1 attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+  %true = arith.constant true
+  %0 = quake.null_wire
+  %1 = quake.null_wire
+  %2 = quake.null_wire
+  %3 = quake.h %2 : (!quake.wire) -> !quake.wire
+  %4:3 = cc.if(%true) ((%arg0 = %1, %arg1 = %0, %arg2 = %3)) -> (!quake.wire, !quake.wire, !quake.wire) {
+    %6 = quake.x %arg0 : (!quake.wire) -> !quake.wire
+    %7 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+    %8:2 = quake.x [%7] %arg2 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+    cc.continue %6, %8#0, %8#1 : !quake.wire, !quake.wire, !quake.wire
+  } else {
+    %6 = quake.y %arg1 : (!quake.wire) -> !quake.wire
+    %7 = quake.x %arg2 : (!quake.wire) -> !quake.wire
+    %8:2 = quake.x [%6] %arg0 : (!quake.wire, !quake.wire) -> (!quake.wire, !quake.wire)
+    cc.continue %8#1, %8#0, %7 : !quake.wire, !quake.wire, !quake.wire
+  }
+  %measOut, %wires = quake.mz %4#2 name "b" : (!quake.wire) -> (!quake.measure, !quake.wire)
+  %5 = quake.discriminate %measOut : (!quake.measure) -> i1
+  quake.sink %4#1 : !quake.wire
+  quake.sink %4#0 : !quake.wire
+  quake.sink %wires : !quake.wire
+  return %5 : i1
+}
