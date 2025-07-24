@@ -48,8 +48,7 @@ add_cudaq_library(OptTransforms
   DependencyAnalysis.cpp
   MultiControlDecomposition.cpp
   ObserveAnsatz.cpp
-  PhasePolynomialRotationMerging.cpp
-  PhasePolynomialPreprocess.cpp
+  PhaseFolding.cpp
   PruneCtrlRelations.cpp
   PySynthCallableBlockArgs.cpp
   QuakeAddMetadata.cpp
@@ -59,7 +58,6 @@ add_cudaq_library(OptTransforms
   RegToMem.cpp
   ReplaceStateWithKernel.cpp
   SROA.cpp
-  Subcircuit.cpp
   StatePreparation.cpp
   UnitarySynthesis.cpp
   UpdateRegisterNames.cpp
