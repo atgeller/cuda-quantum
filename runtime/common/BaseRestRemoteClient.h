@@ -227,10 +227,15 @@ public:
       moduleOp.getContext()->disableMultithreading();
       pm.enableIRPrinting();
     }
+    cudaq::info("BaseRestRemoteClient: running lowering pipeline {}", pipeline);
     if (failed(parsePassPipeline(pipeline, pm, os)))
       throw std::runtime_error(
           "Remote rest platform failed to add passes to pipeline (" + errMsg +
           ").");
+
+    if (failed(pm.run(moduleOp)))
+      throw std::runtime_error(
+          "Remote rest platform: applying IR passes failed.");
 
     return moduleOp;
   }

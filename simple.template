@@ -10,6 +10,7 @@
 
 #include <cudaq.h>
 #include <cudaq/algorithm.h>
+#include <cudaq/algorithms/resource_estimation.h>
 #include <random>
 
 int main() {
@@ -20,14 +21,16 @@ int main() {
 
   cudaq::set_random_seed(27);
   auto start = std::chrono::steady_clock::now();
-  auto counts = cudaq::sample(1, kernel);
+  cudaq::sample(1, kernel);
   auto end = std::chrono::steady_clock::now();
+  auto counts = cudaq::estimate_resources(kernel);
   auto duration = static_cast<double>(
           std::chrono::duration_cast<std::chrono::microseconds>(
               end - start)
               .count() /
           1000.0);
   printf("Total time: %fms\n", duration);
+  printf("# rzs: %ld\n", counts.count("rz"));
   return 0;
 }
 
