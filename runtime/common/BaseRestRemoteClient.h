@@ -202,6 +202,7 @@ public:
         moduleOp.getContext()->disableMultithreading();
         pm.enableIRPrinting();
       }
+      mlir::DefaultTimingManager tm;
       if (failed(pm.run(moduleOp)))
         throw std::runtime_error("Could not successfully apply quake-synth.");
     }
@@ -235,6 +236,10 @@ public:
 
     opt::addPipelineConvertToQIR(pm, qirVersionUnderDevelopment);
 
+    mlir::DefaultTimingManager tm;
+    tm.setEnabled(cudaq::isTimingTagEnabled(cudaq::TIMING_JIT_PASSES));
+    auto timingScope = tm.getRootScope(); // starts the timer
+    pm.enableTiming(timingScope);         // do this right before pm.run
     if (failed(pm.run(moduleOp)))
       throw std::runtime_error(
           "Remote rest platform: applying IR passes failed.");
@@ -296,6 +301,11 @@ public:
       void (*kernelFunc)(void *), const void *kernelArgs,
       std::uint64_t argsSize, const std::vector<void *> *rawArgs) {
 
+    ScopedTraceWithContext(cudaq::TIMING_JIT,
+                           "BaseRemoteRestRuntimeClient::constructJobRequest");
+    // For local testing, have to use steady clock
+    auto start = std::chrono::steady_clock::now();
+
     cudaq::RestRequest request(io_context, version());
     if (serializedCodeContext)
       request.serializedCodeExecutionContext = *serializedCodeContext;
@@ -355,6 +365,13 @@ public:
           std::numeric_limits<std::size_t>::max());
       return seedGen(randEngine);
     }();
+    auto end = std::chrono::steady_clock::now();
+    auto duration = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start)
+            .count() /
+        1000.0);
+    if (cudaq::isTimingTagEnabled(cudaq::TIMING_JIT))
+      llvm::outs() << "JIT time: " << duration << "ms\n";
     return request;
   }
 

@@ -1,0 +1,33 @@
+/*******************************************************************************
+* Copyright (c) 2022 - 2025 NVIDIA Corporation & Affiliates.                  *
+* All rights reserved.                                                        *
+*                                                                             *
+* This source code and the accompanying materials are made available under    *
+* the terms of the Apache License 2.0 which accompanies this distribution.    *
+******************************************************************************/
+
+// RUN: python3 %random_gen_script %s --seed=27 --block-length=100 --rz-weight=0.5 > %t.cpp && nvq++ %t.cpp --target=remote-mqpu -o %t && %t
+
+#include <cudaq.h>
+#include <cudaq/algorithm.h>
+#include <random>
+
+int main() {
+  auto kernel = []() __qpu__ {
+    GEN-QALLOC: nqubits=5
+    GEN-SUBCIRCUIT
+  };
+
+  cudaq::set_random_seed(27);
+  auto start = std::chrono::steady_clock::now();
+  auto counts = cudaq::sample(1, kernel);
+  auto end = std::chrono::steady_clock::now();
+  auto duration = static_cast<double>(
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              end - start)
+              .count() /
+          1000.0);
+  printf("Total time: %fms\n", duration);
+  return 0;
+}
+
