@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import re
 import argparse
+import random
 from random_gen import generate_program
 from scipy import stats
 
@@ -114,7 +115,7 @@ def run_benchmark(executable):
 
 # Generate and run benchmark based on template using options
 # Runs with multiple random seeds to reduce the risk of outlier seeds
-def benchmark(template, options, seeds=range(0, 50, 10), iterations=5):
+def benchmark(template, options, seeds, iterations=5):
     launch_times = []
     opt_launch_times = []
     jit_times = []
@@ -156,18 +157,49 @@ argparser = argparse.ArgumentParser(
     description=
     'Configurable benchmarking of optimization using randomly generated kernels',
     epilog='')
-argparser.add_argument('--result-file', type=str, default="results.csv")
-argparser.add_argument('--raw-data-file', type=str, default=None)
-argparser.add_argument('--block-lengths', nargs="+", type=int)
-argparser.add_argument('--rz-weights', nargs="+", type=float)
-argparser.add_argument('--n-qubits', nargs="+", type=int)
-argparser.add_argument('--seeds', nargs="+", type=int, default=[0])
-argparser.add_argument('--iterations', type=int, default=5)
+argparser.add_argument('--result-file',
+                       type=str,
+                       default="results.csv",
+                       help="The file to which results (mean, sem) are written")
+argparser.add_argument(
+    '--raw-data-file',
+    type=str,
+    default=None,
+    help="If provided, dumps raw results to the provided file in csv format")
+argparser.add_argument(
+    '--block-lengths',
+    nargs="+",
+    type=int,
+    help="Configuration variable: number of gates in the circuit")
+argparser.add_argument(
+    '--rz-weights',
+    nargs="+",
+    type=float,
+    help=
+    "Configuration variable: probability with which a given instruction is an rz"
+)
+argparser.add_argument('--n-qubits',
+                       nargs="+",
+                       type=int,
+                       help="Configuration variable: number of qubits")
+argparser.add_argument('--seed', type=int, default=0)
+argparser.add_argument(
+    '--n-seeds',
+    type=int,
+    default=5,
+    help="The number of random circuits to generate for each configuration")
+argparser.add_argument(
+    '--iterations',
+    type=int,
+    default=5,
+    help="The number of times to run each randomly generated circuit")
 
 if __name__ == '__main__':
     log_file = tempfile.NamedTemporaryFile(mode='w+b', delete=False)
     log_command(" ".join(sys.argv))
     args = argparser.parse_args()
+
+    random.seed(args.seed)
     print("Logging to " + log_file.name)
     print("Outputting to " + args.result_file)
     result_file = open(args.result_file, 'w')
@@ -189,8 +221,10 @@ if __name__ == '__main__':
                 options.block_length = int(length)
                 options.rz_weight = float(rz_weight)
                 options.n_qubits = int(n_qubits)
-                print(str(options))
-                benchmark("simple.template", options, args.seeds,
-                          args.iterations)
+                seeds = [
+                    random.randint(0, sys.maxsize)
+                    for _ in range(0, args.n_seeds)
+                ]
+                benchmark("simple.template", options, seeds, args.iterations)
 
     log_file.close()
