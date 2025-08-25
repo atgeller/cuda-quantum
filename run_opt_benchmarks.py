@@ -115,7 +115,7 @@ def run_benchmark(executable):
 
 # Generate and run benchmark based on template using options
 # Runs with multiple random seeds to reduce the risk of outlier seeds
-def benchmark(template, options, seeds, iterations=5):
+def benchmark(template, options, seeds, iterations):
     launch_times = []
     opt_launch_times = []
     jit_times = []
@@ -139,13 +139,16 @@ def benchmark(template, options, seeds, iterations=5):
             opt_launch_times.append(opt_results["launch"])
             opt_jit_times.append(opt_results["jit"])
             raw_data = [
-                template, seed, results["launch"], results["jit"],
+                template, seed, options.block_length, options.rz_weight,
+                options.n_qubits, results["launch"], results["jit"],
                 opt_results["launch"], opt_results["jit"], results["n_rzs"],
                 opt_results["n_rzs"]
             ]
             write_raw_line(raw_data)
     raw_data = [launch_times, opt_launch_times, jit_times, opt_jit_times]
-    csv_data = [template, seed]
+    csv_data = [
+        template, options.block_length, options.rz_weight, options.n_qubits
+    ]
     for datum in raw_data:
         csv_data += [stats.gmean(datum), stats.sem(datum)]
     csv_data += [stats.gmean(n_rzs), stats.gmean(opt_n_rzs)]
@@ -191,7 +194,7 @@ argparser.add_argument(
 argparser.add_argument(
     '--iterations',
     type=int,
-    default=5,
+    default=3,
     help="The number of times to run each randomly generated circuit")
 
 if __name__ == '__main__':
@@ -204,7 +207,7 @@ if __name__ == '__main__':
     print("Outputting to " + args.result_file)
     result_file = open(args.result_file, 'w')
     result_file.write(
-        "template, seed, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit opt mean, jit opt sem, jit mean, jit sem, # rzs, opt # rzs\n"
+        "template, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit opt mean, jit opt sem, jit mean, jit sem, # rzs, opt # rzs\n"
     )
     result_file.flush()
     if args.raw_data_file is not None:
