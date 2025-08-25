@@ -207,14 +207,14 @@ if __name__ == '__main__':
     print("Outputting to " + args.result_file)
     result_file = open(args.result_file, 'w')
     result_file.write(
-        "template, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit opt mean, jit opt sem, jit mean, jit sem, # rzs, opt # rzs\n"
+        "template, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit mean, jit sem, jit opt mean, jit opt sem, # rzs, opt # rzs\n"
     )
     result_file.flush()
     if args.raw_data_file is not None:
         print("Outputting raw data to " + args.raw_data_file)
         raw_file = open(args.raw_data_file, 'w')
         raw_file.write(
-            "template, seed, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit opt mean, jit opt sem, jit mean, jit sem, # rzs, opt # rzs\n"
+            "template, seed, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit mean, jit sem, jit opt mean, jit opt sem, # rzs, opt # rzs\n"
         )
         raw_file.flush()
     for length in args.block_lengths:
