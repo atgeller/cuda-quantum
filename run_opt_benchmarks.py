@@ -54,18 +54,19 @@ class Options:
 
 
 # Generate and compile benchmark executable from a template
-def prepare_benchmark(template, outfile, options):
+def prepare_benchmark(template, outfile, options, target):
+    log_command("python3 random_gen.py " + template + " " + str(options))
     program = generate_program(template, options.seed, options.rz_weight,
                                [options.block_length], [options.n_qubits])
-    log_command("python3 random_gen.py " + template + " " + str(options))
     tmp_filename = template + ".cpp"
     with open(tmp_filename, 'w') as tmp_file:
         tmp_file.write(program)
-    subprocess.run(
-        ["nvq++", "--target=remote-mqpu", tmp_filename, "-o", outfile],
-        check=True)
-    log_command("nvq++  --target=remote-mqpu {} -o {}".format(
-        tmp_filename, outfile))
+    log_command(" ".join(
+        ["nvq++", "--target=" + target, tmp_filename, "-o", outfile]))
+    subprocess.run(" ".join(
+        ["nvq++", "--target=" + target, tmp_filename, "-o", outfile]),
+                   shell=True,
+                   check=True)
 
 
 # Run a single benchmark, capture time info
@@ -115,7 +116,7 @@ def run_benchmark(executable):
 
 # Generate and run benchmark based on template using options
 # Runs with multiple random seeds to reduce the risk of outlier seeds
-def benchmark(template, options, seeds, iterations):
+def benchmark(template, options, seeds, iterations, target):
     launch_times = []
     opt_launch_times = []
     jit_times = []
@@ -123,16 +124,21 @@ def benchmark(template, options, seeds, iterations):
     n_rzs = []
     opt_n_rzs = []
     for seed in seeds:
+        print("\tGenerating circuit with seed " + str(seed))
         exec_file = "tmp.x"
         options.seed = seed
-        prepare_benchmark(template, exec_file, options)
+        print("\t\tCompiling...")
+        prepare_benchmark(template, exec_file, options, target)
         # Do a warmup run to prepare the cache, etc...
         # However, we take the number of rzs from this warmup, as it
         # is constant across runs for the same seed, unlike the times
+        print("\t\tRunning warm up...")
         [results, opt_results] = run_benchmark(exec_file)
         n_rzs.append(results["n_rzs"])
         opt_n_rzs.append(opt_results["n_rzs"])
-        for _ in range(0, iterations + 1):
+        for iteration in range(0, iterations):
+            print("\t\tRunning iteration {} out of {}".format(
+                iteration + 1, iterations))
             [results, opt_results] = run_benchmark(exec_file)
             launch_times.append(results["launch"])
             jit_times.append(results["jit"])
@@ -196,6 +202,11 @@ argparser.add_argument(
     type=int,
     default=3,
     help="The number of times to run each randomly generated circuit")
+argparser.add_argument('--targets',
+                       type=str,
+                       nargs="+",
+                       default=["remote-mqpu"],
+                       help="A list of targets to run on")
 
 if __name__ == '__main__':
     log_file = tempfile.NamedTemporaryFile(mode='w+b', delete=False)
@@ -217,17 +228,22 @@ if __name__ == '__main__':
             "template, seed, block len, rz weight, n qubits, launch mean, launch sem, launch opt mean, launch opt sem, jit mean, jit sem, jit opt mean, jit opt sem, # rzs, opt # rzs\n"
         )
         raw_file.flush()
-    for length in args.block_lengths:
-        for rz_weight in args.rz_weights:
-            for n_qubits in args.n_qubits:
-                options = Options()
-                options.block_length = int(length)
-                options.rz_weight = float(rz_weight)
-                options.n_qubits = int(n_qubits)
-                seeds = [
-                    random.randint(0, sys.maxsize)
-                    for _ in range(0, args.n_seeds)
-                ]
-                benchmark("simple.template", options, seeds, args.iterations)
+    for target in args.targets:
+        for length in args.block_lengths:
+            for rz_weight in args.rz_weights:
+                for n_qubits in args.n_qubits:
+                    options = Options()
+                    options.block_length = int(length)
+                    options.rz_weight = float(rz_weight)
+                    options.n_qubits = int(n_qubits)
+                    print(
+                        "Running configuration: target={}, block-length={}, rz-weight={}, n-qubits={}"
+                        .format(target, length, rz_weight, n_qubits))
+                    seeds = [
+                        random.randint(0, sys.maxsize)
+                        for _ in range(0, args.n_seeds)
+                    ]
+                    benchmark("simple.template", options, seeds,
+                              args.iterations, target)
 
     log_file.close()
