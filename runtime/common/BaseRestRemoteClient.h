@@ -77,7 +77,8 @@ private:
 } // namespace
 
 namespace cudaq {
-class BaseRemoteRestRuntimeClient : public cudaq::RemoteRuntimeClient {
+
+class BaseRemoteRestRuntimeClient : public RemoteRuntimeClient {
 protected:
   std::string m_url;
   static inline const std::vector<std::string> clientPasses = {};
@@ -219,20 +220,26 @@ public:
                         [](const auto &ss, const auto &s) {
                           return ss.empty() ? s : ss + "," + s;
                         });
-    if (getEnvBool("CUDAQ_PHASE_FOLDING", false))
-      pipeline = pipeline +
-                 "classical-optimization-pipeline,aggressive-early-inlining,"
-                 "func.func(canonicalize,cse,phase-folding,canonicalize)";
+    // TODO: replace environment variable with runtime
+    // Enabled by default
+    if (getEnvBool("CUDAQ_PHASE_FOLDING", true))
+      pipeline =
+          pipeline + "func.func(canonicalize,cse,phase-folding,canonicalize)";
+
     if (enablePrintMLIREachPass) {
       moduleOp.getContext()->disableMultithreading();
       pm.enableIRPrinting();
     }
-    cudaq::info("BaseRestRemoteClient: running lowering pipeline {}", pipeline);
+
     if (failed(parsePassPipeline(pipeline, pm, os)))
       throw std::runtime_error(
           "Remote rest platform failed to add passes to pipeline (" + errMsg +
           ").");
 
+    mlir::DefaultTimingManager tm;
+    tm.setEnabled(cudaq::isTimingTagEnabled(cudaq::TIMING_JIT_PASSES));
+    auto timingScope = tm.getRootScope(); // starts the timer
+    pm.enableTiming(timingScope);         // do this right before pm.run
     if (failed(pm.run(moduleOp)))
       throw std::runtime_error(
           "Remote rest platform: applying IR passes failed.");
@@ -245,14 +252,12 @@ public:
                                      std::uint64_t voidStarSize,
                                      std::size_t startingArgIdx,
                                      const std::vector<void *> *rawArgs) {
-    bool qirVersionUnderDevelopment =
-        getEnvBool("CUDAQ_QIR_VERSION_UNDER_DEVELOPMENT", false);
-
     auto moduleOp = lowerKernel(mlirContext, name, args, voidStarSize,
                                 startingArgIdx, rawArgs);
 
     mlir::PassManager pm(&mlirContext);
-    opt::addPipelineConvertToQIR(pm, qirVersionUnderDevelopment);
+    // For now, the server side expects full-QIR.
+    opt::addPipelineConvertToQIR(pm, "qir:0.1");
 
     mlir::DefaultTimingManager tm;
     tm.setEnabled(cudaq::isTimingTagEnabled(cudaq::TIMING_JIT_PASSES));
@@ -270,6 +275,7 @@ public:
     moduleOp.print(outStr, opf);
     return llvm::encodeBase64(mlirCode);
   }
+
   cudaq::RestRequest constructVQEJobRequest(
       mlir::MLIRContext &mlirContext, cudaq::ExecutionContext &io_context,
       const std::string &backendSimName, const std::string &kernelName,
