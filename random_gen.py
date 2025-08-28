@@ -359,4 +359,4 @@ if __name__ == '__main__':
     n_qubits = parse_range(args.n_qubits)
     rz_weight = args.rz_weight
 
-    print(generate_program(template, seed, block_length, rz_weight, n_qubits))
+    print(generate_program(template, seed, rz_weight, block_length, n_qubits))
