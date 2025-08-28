@@ -243,7 +243,7 @@ if __name__ == '__main__':
                         random.randint(0, sys.maxsize)
                         for _ in range(0, args.n_seeds)
                     ]
-                    benchmark("simple.template", options, seeds,
+                    benchmark("benchmarks/simple.template", options, seeds,
                               args.iterations, target)
 
     log_file.close()
