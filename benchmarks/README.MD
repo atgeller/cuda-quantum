@@ -51,8 +51,12 @@ python3 run_opt_benchmarks.py --block-lengths 100 200 --rz-weights 0.5 0.6 \
     --n-qubits 5 10 --seed 489 --n-seeds=2 --iterations=1 --raw-data-file=raw.csv
 ```
 
+In addition, the `--targets TARGET [TARGETS]` option can be used to specify
+a particular target or targets to run the benchmarks on. The default target
+is currently `remote-mqpu`.
+
 ## Running Benchmarks in a Docker Contaienr
 
 Finally, `run_phase_folding_benchmarking.sh` provides an example of how to run
 the above scripts in the cuda-quantum development container and extract the
-results.
+results. It must be run from the repo root.

@@ -12,7 +12,7 @@ docker build -t cudaq-dev -f docker/build/cudaq.dev.Dockerfile . --build-arg ins
 
 nvidia-docker run -dit --name runner --rm cudaq-dev 
 
-docker exec runner python3 -u run_phase_folding_benchmarks.py --block-lengths 5 10 25 50 100 250 500 1000 --rz-weights 0.15 0.3 0.5 0.7 0.85 --n-qubits 3 5 10 15 20 --seed 489 --n-seeds=5 --iterations=3 --raw-data-file=raw.csv
+docker exec runner python3 -u benchmarks/run_phase_folding_benchmarks.py --block-lengths 5 10 25 50 100 250 500 1000 --rz-weights 0.15 0.3 0.5 0.7 0.85 --n-qubits 3 5 10 15 20 --seed 489 --n-seeds=5 --iterations=3 --raw-data-file=raw.csv
 
 docker cp runner:/workspaces/cuda-quantum/results.csv .
 docker cp runner:/workspaces/cuda-quantum/raw.csv .
