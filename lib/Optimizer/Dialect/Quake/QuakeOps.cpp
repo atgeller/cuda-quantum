@@ -748,6 +748,16 @@ void cudaq::quake::WrapOp::getCanonicalizationPatterns(
 }
 
 //===----------------------------------------------------------------------===//
+// GlobalPhaseOp
+//===----------------------------------------------------------------------===//
+
+void cudaq::quake::GlobalPhaseOp::getCanonicalizationPatterns(
+    RewritePatternSet &patterns, MLIRContext *context) {
+  patterns.add<FoldZeroGlobalPhasePattern, FuseGlobalPhasePattern,
+               HoistGlobalPhasePattern>(context);
+}
+
+//===----------------------------------------------------------------------===//
 // CallByRefOp
 //===----------------------------------------------------------------------===//
 
@@ -996,6 +1006,17 @@ static LogicalResult getParameterAsDouble(Value parameter, double &result) {
     }
   }
   return failure();
+}
+
+void cudaq::quake::GlobalPhaseOp::getOperatorMatrix(Matrix &matrix) {
+  using namespace std::complex_literals;
+  double phi;
+  if (failed(getParameterAsDouble(getParameter(), phi)))
+    return;
+  if (getIsAdj())
+    phi *= -1;
+  auto factor = std::exp(1i * phi);
+  matrix.assign({factor, 0, 0, factor});
 }
 
 void cudaq::quake::HOp::getOperatorMatrix(Matrix &matrix) {
@@ -1252,7 +1273,8 @@ void cudaq::quake::getOperatorEffectsImpl(EffectsVectorImpl &effects,
 // clang-format off
 #define GATE_OPS(MACRO) MACRO(XOp) MACRO(YOp) MACRO(ZOp) MACRO(HOp) MACRO(SOp) \
   MACRO(TOp) MACRO(SwapOp) MACRO(U2Op) MACRO(U3Op) MACRO(R1Op) MACRO(RxOp)     \
-  MACRO(RyOp) MACRO(RzOp) MACRO(PhasedRxOp) MACRO(CustomUnitarySymbolOp)
+  MACRO(RyOp) MACRO(RzOp) MACRO(PhasedRxOp) MACRO(CustomUnitarySymbolOp)       \
+  MACRO(GlobalPhaseOp)
 #define MEASURE_OPS(MACRO) MACRO(MxOp) MACRO(MyOp) MACRO(MzOp)
 #define QUANTUM_OPS(MACRO) MACRO(ResetOp) MACRO(ExpPauliOp) GATE_OPS(MACRO)    \
   MEASURE_OPS(MACRO)

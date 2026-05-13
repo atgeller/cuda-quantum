@@ -579,9 +579,8 @@ struct ExpPauliDecomposition
 REGISTER_DECOMPOSITION_PATTERN(ExpPauliDecomposition, "exp_pauli", "rx", "h",
                                "x(1)", "rz");
 
-// Naive mapping of R1 to Rz, ignoring the global phase.
-// This is only expected to work with full inlining and
-// quake apply specialization.
+// Naive mapping of R1 to Rz. In wire form the dropped global phase
+// e^(iλ/2) is tracked with a `quake.global_phase` op.
 struct R1ToRzType; // forward declare the pattern type, defined in the macro
                    // below
 struct R1ToRz
@@ -594,9 +593,27 @@ struct R1ToRz
     if (!r1Op.getControls().empty())
       return failure();
 
-    rewriter.replaceOpWithNewOp<cudaq::quake::RzOp>(
-        r1Op, r1Op.isAdj(), r1Op.getParameters(), r1Op.getControls(),
-        r1Op.getTargets());
+    auto loc = r1Op.getLoc();
+    auto lambda = r1Op.getParameters()[0];
+    auto rz = rewriter.create<cudaq::quake::RzOp>(
+        loc, r1Op.getResultTypes(), r1Op.getIsAdjAttr(), r1Op.getParameters(),
+        r1Op.getControls(), r1Op.getTargets(),
+        r1Op.getNegatedQubitControlsAttr());
+
+    if (rz.getWires().size() == 1 &&
+        isa<cudaq::quake::WireType>(rz.getWires()[0].getType())) {
+      auto two = arith::ConstantFloatOp::create(
+          rewriter, loc, cast<FloatType>(lambda.getType()), APFloat(2.0));
+      Value half = arith::DivFOp::create(rewriter, loc, lambda, two);
+      auto gp = cudaq::quake::GlobalPhaseOp::create(
+          rewriter, loc, TypeRange{rz.getWires()[0].getType()},
+          r1Op.getIsAdjAttr(), ValueRange{half}, ValueRange{},
+          ValueRange{rz.getWires()[0]}, DenseBoolArrayAttr{});
+      rewriter.replaceOp(r1Op, gp.getWires());
+      return success();
+    }
+
+    rewriter.replaceOp(r1Op, rz.getResults());
     return success();
   }
 };

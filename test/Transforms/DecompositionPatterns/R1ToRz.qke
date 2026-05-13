@@ -1,0 +1,57 @@
+// ========================================================================== //
+// Copyright (c) 2022 - 2026 NVIDIA Corporation & Affiliates.                 //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+// RUN: cudaq-opt -pass-pipeline='builtin.module(decomposition{enable-patterns=R1ToRz})' %s | FileCheck %s --check-prefix=REF
+// RUN: cudaq-opt -pass-pipeline='builtin.module(func.func(memtoreg),decomposition{enable-patterns=R1ToRz})' %s | FileCheck %s --check-prefix=WIRE
+
+// In ref form the dropped global phase is silently discarded (the existing
+// pipeline relies on inlining + apply-specialization having run first).
+
+// REF-LABEL: func.func @r1
+// REF-NOT:   quake.global_phase
+// REF:       quake.rz
+func.func @r1(%q: !quake.ref) {
+  %0 = arith.constant 1.57079632679489660 : f64
+  quake.r1 (%0) %q : (f64, !quake.ref) -> ()
+  return
+}
+
+// In wire form `r1(λ)` becomes `rz(λ) ; global_phase(λ/2)` on the resulting
+// wire.
+
+// WIRE-LABEL: func.func @r1
+// WIRE:       quake.rz
+// WIRE:       quake.global_phase
+
+// `r1<adj>` carries the adjoint attribute through to the new `global_phase`.
+
+// REF-LABEL: func.func @r1_adj
+// REF:       quake.rz<adj>
+// REF-NOT:   quake.global_phase
+// WIRE-LABEL: func.func @r1_adj
+// WIRE:       quake.rz<adj>
+// WIRE:       quake.global_phase<adj>
+func.func @r1_adj(%q: !quake.ref) {
+  %0 = arith.constant 1.57079632679489660 : f64
+  quake.r1<adj> (%0) %q : (f64, !quake.ref) -> ()
+  return
+}
+
+// Controlled `r1` is not rewritten by this pattern (existing behavior).
+
+// REF-LABEL: func.func @r1_controlled
+// REF-NOT:   quake.global_phase
+// REF:       quake.r1
+// WIRE-LABEL: func.func @r1_controlled
+// WIRE-NOT:   quake.global_phase
+// WIRE:       quake.r1
+func.func @r1_controlled(%c: !quake.ref, %q: !quake.ref) {
+  %0 = arith.constant 1.57079632679489660 : f64
+  quake.r1 (%0) [%c] %q : (f64, !quake.ref, !quake.ref) -> ()
+  return
+}

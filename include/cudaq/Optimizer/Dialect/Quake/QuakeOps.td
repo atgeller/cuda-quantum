@@ -1755,6 +1755,30 @@ def ZOp : OneTargetOp<"z", [Hermitian]> {
   }];
 }
 
+def quake_GlobalPhaseOp : OneTargetParamOp<"global_phase"> {
+  let summary = "a global phase e^(i*phi) on the joint state";
+  let description = [{
+    Matrix representation:
+    ```
+    GlobalPhase(phi) = diag(exp(i*phi))
+    ```
+
+    Circuit symbol:
+    ```
+     ┌──────────────┐
+    ─┤ GlobalPhase(φ) ├─
+     └──────────────┘
+    ```
+
+    Anchored to a wire so the phase travels with the kernel's data flow.
+    Has no observable effect in isolation; under controlled lowering it
+    becomes a relative phase on the control qubit. Adjoint is
+    `global_phase(-phi)`. Value-form only.
+  }];
+
+  let hasCanonicalizer = 1;
+}
+
 def CustomUnitarySymbolOp :
     QuakeOperator<"custom_op", [], (ins SymbolRefAttr:$generator)> {
   let summary = "Custom unitary operation.";

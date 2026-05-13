@@ -1,0 +1,59 @@
+// ========================================================================== //
+// Copyright (c) 2022 - 2026 NVIDIA Corporation & Affiliates.                 //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+// RUN: cudaq-opt --canonicalize %s | FileCheck %s
+
+// A `quake.global_phase` with a constant 0.0 parameter is dropped and its
+// input wire is forwarded.
+
+// CHECK-LABEL: func.func @fold_zero
+// CHECK-NOT:   quake.global_phase
+// CHECK:       quake.sink
+func.func @fold_zero() {
+  %0 = quake.null_wire
+  %z = arith.constant 0.0 : f64
+  %1 = quake.global_phase (%z) %0 : (f64, !quake.wire) -> !quake.wire
+  quake.sink %1 : !quake.wire
+  return
+}
+
+// Two adjacent `quake.global_phase` ops on the same wire fuse into a single
+// op whose parameter is the sum of the two phases.
+
+// CHECK-LABEL: func.func @fuse_adjacent
+// CHECK:       %[[SUM:.*]] = arith.constant 7.500000e-01 : f64
+// CHECK:       quake.global_phase (%[[SUM]])
+// CHECK-NOT:   quake.global_phase
+func.func @fuse_adjacent() {
+  %0 = quake.null_wire
+  %a = arith.constant 0.25 : f64
+  %b = arith.constant 0.50 : f64
+  %1 = quake.global_phase (%a) %0 : (f64, !quake.wire) -> !quake.wire
+  %2 = quake.global_phase (%b) %1 : (f64, !quake.wire) -> !quake.wire
+  quake.sink %2 : !quake.wire
+  return
+}
+
+// `gp` between two `x` gates on the same wire hoists past the first `x`,
+// so peepholes that pattern-match along the wire (e.g. a future `x . x = I`
+// cancellation) are not blocked by the intervening phase op.
+
+// CHECK-LABEL: func.func @hoist_past_gate
+// CHECK:       %[[W0:.*]] = quake.null_wire
+// CHECK-NEXT:  %[[GP:.*]] = quake.global_phase (%{{.*}}) %[[W0]]
+// CHECK-NEXT:  %[[X1:.*]] = quake.x %[[GP]]
+// CHECK-NEXT:  %[[X2:.*]] = quake.x %[[X1]]
+// CHECK-NEXT:  quake.sink %[[X2]]
+func.func @hoist_past_gate(%phi: f64) {
+  %0 = quake.null_wire
+  %1 = quake.x %0 : (!quake.wire) -> !quake.wire
+  %2 = quake.global_phase (%phi) %1 : (f64, !quake.wire) -> !quake.wire
+  %3 = quake.x %2 : (!quake.wire) -> !quake.wire
+  quake.sink %3 : !quake.wire
+  return
+}

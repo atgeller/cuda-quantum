@@ -731,6 +731,112 @@ struct MergeRotationPattern : public OpRewritePattern<OP> {
   }
 };
 
+// Drop a `quake.global_phase` whose parameter is a constant 0.0.
+struct FoldZeroGlobalPhasePattern
+    : public OpRewritePattern<cudaq::quake::GlobalPhaseOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(cudaq::quake::GlobalPhaseOp gp,
+                                PatternRewriter &rewriter) const override {
+    auto cst =
+        gp.getParameter(0).getDefiningOp<arith::ConstantFloatOp>();
+    if (!cst || !cst.value().isZero())
+      return failure();
+    auto target = gp.getTarget(0);
+    if (!isa<cudaq::quake::WireType>(target.getType()))
+      return failure();
+    rewriter.replaceOp(gp, target);
+    return success();
+  }
+};
+
+// Fuse two adjacent `quake.global_phase` ops on the same wire into one with
+// the sum of their phases.
+struct FuseGlobalPhasePattern
+    : public OpRewritePattern<cudaq::quake::GlobalPhaseOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(cudaq::quake::GlobalPhaseOp gp,
+                                PatternRewriter &rewriter) const override {
+    auto target = gp.getTarget(0);
+    if (!isa<cudaq::quake::WireType>(target.getType()))
+      return failure();
+    auto inner = target.getDefiningOp<cudaq::quake::GlobalPhaseOp>();
+    if (!inner)
+      return failure();
+    auto p1 = inner.getParameter(0);
+    auto p2 = gp.getParameter(0);
+    if (p1.getType() != p2.getType())
+      return failure();
+    Value q1 = inner.isAdj() ? arith::NegFOp::create(rewriter, gp.getLoc(), p1)
+                              : p1;
+    Value q2 = gp.isAdj() ? arith::NegFOp::create(rewriter, gp.getLoc(), p2)
+                           : p2;
+    Value sum = arith::AddFOp::create(rewriter, gp.getLoc(), q1, q2);
+    rewriter.replaceOpWithNewOp<cudaq::quake::GlobalPhaseOp>(
+        gp, gp.getResultTypes(), /*is_adj=*/false, ValueRange{sum},
+        ValueRange{}, ValueRange{inner.getTarget(0)}, DenseBoolArrayAttr{});
+    return success();
+  }
+};
+
+// Hoist `quake.global_phase` past a preceding single-target operator op on the
+// same wire, moving the phase toward the head of the wire. This lets peephole
+// rewrites that pattern-match along a wire (e.g. `x . x = I`) fire across an
+// intervening phase op after canonicalization.
+struct HoistGlobalPhasePattern
+    : public OpRewritePattern<cudaq::quake::GlobalPhaseOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(cudaq::quake::GlobalPhaseOp gp,
+                                PatternRewriter &rewriter) const override {
+    auto target = gp.getTarget(0);
+    if (!isa<cudaq::quake::WireType>(target.getType()))
+      return failure();
+    auto op = target.getDefiningOp<cudaq::quake::OperatorInterface>();
+    // Don't hoist past another global_phase — `FuseGlobalPhasePattern` handles
+    // that case and produces a smaller result.
+    if (!op || isa<cudaq::quake::GlobalPhaseOp>(op.getOperation()))
+      return failure();
+    // Find which target wire of `op` flows into `gp`.
+    auto wires = op.getWires();
+    unsigned idx = 0;
+    bool found = false;
+    for (auto [i, w] : llvm::enumerate(wires)) {
+      if (w == target) {
+        idx = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      return failure();
+    auto targets = op.getTargets();
+    if (idx >= targets.size())
+      return failure();
+    Value targetOperand = targets[idx];
+    if (!isa<cudaq::quake::WireType>(targetOperand.getType()))
+      return failure();
+    // Build the hoisted phase op above `op`.
+    rewriter.setInsertionPoint(op);
+    auto newGp = cudaq::quake::GlobalPhaseOp::create(
+        rewriter, gp.getLoc(), TypeRange{targetOperand.getType()},
+        gp.getIsAdjAttr(), gp.getParameters(), ValueRange{},
+        ValueRange{targetOperand}, gp.getNegatedQubitControlsAttr());
+    // Rewire `op`'s target operand to consume the new phase op's wire.
+    Operation *raw = op.getOperation();
+    for (unsigned k = 0, e = raw->getNumOperands(); k < e; ++k) {
+      if (raw->getOperand(k) == targetOperand) {
+        rewriter.modifyOpInPlace(
+            raw, [&] { raw->setOperand(k, newGp.getWires()[0]); });
+        break;
+      }
+    }
+    rewriter.replaceOp(gp, wires[idx]);
+    return success();
+  }
+};
+
 // Forward the argument to a relax_size to the users for all users that are
 // quake operations. All quake ops that take a sized veq argument are
 // polymorphic on all veq types. If the op is not a quake op, then maintain
