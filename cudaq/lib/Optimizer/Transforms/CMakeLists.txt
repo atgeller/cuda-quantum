@@ -67,6 +67,7 @@ add_cudaq_library(OptTransforms
   NormalizePhasePlacement.cpp
   ObserveAnsatz.cpp
   OptimizeSingleQubitCliffordT.cpp
+  OutlinePartitions.cpp
   PhaseFolding.cpp
   Pipelines.cpp
   PruneCtrlRelations.cpp
