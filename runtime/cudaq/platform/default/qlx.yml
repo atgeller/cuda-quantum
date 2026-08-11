@@ -19,7 +19,7 @@ cudaq-version: 0.16.0
 # convert-quake-to-qlx                                          ← wire Quake → QLX P0
 
 config:
-  jit-mid-level-pipeline: "canonicalize,globalize-array-values,constant-propagation,canonicalize,cc-loop-unroll,cc-sroa,canonicalize,decomposition{basis=h,s,t,rx,ry,rz,x,y,z,x(1),y(1),z(1),x(2),z(2)},canonicalize,convert-to-linear-values,canonicalize,convert-quake-to-qlx"
-  platform-qpu: TODO
+  # TODO: add QLX runtime endpoint when it's implemented
+  jit-mid-level-pipeline: "canonicalize,globalize-array-values,func.func(constant-propagation,canonicalize,cc-loop-unroll,cc-sroa,canonicalize),decomposition{basis=h,s,t,rx,ry,rz,x,y,z,x(1),y(1),z(1),x(2),z(2)},canonicalize,convert-to-linear-values,canonicalize,convert-quake-to-qlx"
   plugin-libraries:
     - _qlxRuntime.so
