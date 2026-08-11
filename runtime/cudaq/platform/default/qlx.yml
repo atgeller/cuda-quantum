@@ -1,0 +1,22 @@
+# ============================================================================ #
+# Copyright (c) 2026 NVIDIA Corporation & Affiliates.                          #
+# All rights reserved.                                                         #
+#                                                                              #
+# This source code and the accompanying materials are made available under     #
+# the terms of the Apache License 2.0 which accompanies this distribution.     #
+# ============================================================================ #
+
+name: qlx
+description: "Pipeline for lowering to QLX-digestible Quake"
+
+# This pipeline specifically handles the Fermi Hubbard example from QLX.
+# canonicalize + globalize-array-values + constant-propagation  ← fold cc.const_array, expose string literals from paulis
+# canonicalize + cc-loop-unroll                                 ← unroll with now-constant trip counts  
+# cc-sroa + canonicalize                                        ← scalar-replace allocas, expose literals to decomp
+# decomposition{basis=...} + canonicalize                       ← expand exp_pauli to H/CNOT/Rz
+# convert-to-linear-values + canonicalize                       ← ref-semantics → wire-semantics
+# qlx-opt --convert-quake-to-qlx                                ← wire Quake → QLX P0
+
+config:
+  jit-mid-level-pipeline: "canonicalize,globalize-array-values,constant-propagation,canonicalize,cc-loop-unroll,cc-sroa,canonicalize,decomposition{basis=h,s,t,rx,ry,rz,x,y,z,x(1),y(1),z(1),x(2),z(2)},canonicalize,convert-to-linear-values,canonicalize"
+  
