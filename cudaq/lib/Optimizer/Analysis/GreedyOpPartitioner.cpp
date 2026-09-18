@@ -20,8 +20,9 @@
 using namespace mlir;
 
 static bool isQubitValue(Value v) {
-  return isa<cudaq::quake::WireType, cudaq::quake::RefType>(v.getType());
+  return isa<cudaq::quake::WireType>(v.getType());
 }
+
 
 cudaq::opt::GreedyOpPartitioner::GreedyOpPartitioner(Operation *op,
                                                      unsigned maxQubits) {
@@ -57,23 +58,15 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
                             [P](const Part &x) { return &x == P; }));
   };
 
-  // Adds op to partition P, updating qubit tracking for both semantics:
-  //   wire operands  — consumed; erase from wireOwner so the value is dead
-  //   ref  operands  — persistent; register on first encounter, never erase
-  //   qubit results  — new timeline; insert into wireOwner (wire sources and
-  //                    ref AllocaOps both produce qubit results)
+  // Adds op to partition P, updating qubit tracking:
+  //   wire operands — consumed; erase from wireOwner so the value is dead
+  //   wire results  — new timeline; insert into wireOwner
   auto addOp = [&](Part &P, Operation *op, unsigned newQubits) {
-    for (Value w : op->getOperands()) {
+    for (Value w : op->getOperands())
       if (isa<cudaq::quake::WireType>(w.getType())) {
         P.liveWires.erase(w);
         wireOwner.erase(w);
-      } else if (isa<cudaq::quake::RefType>(w.getType())) {
-        if (!wireOwner.count(w)) {
-          P.liveWires.insert(w);
-          wireOwner[w] = &P;
-        }
       }
-    }
     for (Value w : op->getResults())
       if (isQubitValue(w)) {
         P.liveWires.insert(w);
@@ -81,6 +74,22 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
       }
     P.qubitCount += newQubits;
     P.ops.push_back(op);
+  };
+
+  // Held until first use: a partition of pure allocation runs no gate.
+  DenseMap<Value, Operation *> heldSources;
+
+  auto attachSources = [&](Part &P, Operation *op) {
+    for (Value w : op->getOperands()) {
+      if (!isQubitValue(w))
+        continue;
+      auto it = heldSources.find(w);
+      if (it == heldSources.end())
+        continue;
+      Operation *src = it->second;
+      heldSources.erase(it);
+      addOp(P, src, /*newQubits=*/0);
+    }
   };
 
   auto qubitInputCount = [](Operation *op) {
@@ -101,31 +110,25 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
     if (qubitInputCount(&op) > maxQubits)
       continue;
 
-    // Source ops introduce new qubit timelines with no qubit inputs:
-    // null_wire/borrow_wire for wire semantics, AllocaOp(!quake.ref) for ref.
-    bool isSource =
-        isa<quake::NullWireOp, quake::BorrowWireOp>(op) ||
-        (isa<quake::AllocaOp>(op) && llvm::any_of(op.getResults(), [](Value v) {
-           return isa<cudaq::quake::RefType>(v.getType());
-         }));
+    // A source starts a timeline; hold it for whoever uses the wire.
+    if (isa<quake::NullWireOp, quake::BorrowWireOp>(op)) {
+      for (Value w : op.getResults())
+        if (isQubitValue(w))
+          heldSources[w] = &op;
+      continue;
+    }
 
     SmallPtrSet<Part *, 4> touched;
     unsigned extQubits =
         0; // qubit timelines entering from outside any open partition
-    if (isSource) {
-      for (Value w : op.getResults())
-        if (isQubitValue(w))
-          ++extQubits;
-    } else {
-      for (Value w : op.getOperands()) {
-        if (!isQubitValue(w))
-          continue;
-        auto it = wireOwner.find(w);
-        if (it != wireOwner.end())
-          touched.insert(it->second);
-        else
-          ++extQubits; // wire from a closed partition or uninitialized source
-      }
+    for (Value w : op.getOperands()) {
+      if (!isQubitValue(w))
+        continue;
+      auto it = wireOwner.find(w);
+      if (it != wireOwner.end())
+        touched.insert(it->second);
+      else
+        ++extQubits; // wire from a closed partition, or a held source
     }
 
     if (touched.empty()) {
@@ -141,6 +144,7 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
         open.emplace_back();
         target = &open.back();
       }
+      attachSources(*target, &op);
       addOp(*target, &op, extQubits);
 
     } else if (touched.size() == 1) {
@@ -150,8 +154,10 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
         flush(P);
         open.emplace_back();
         // After flush, all of op's wire inputs are external to the new part.
+        attachSources(open.back(), &op);
         addOp(open.back(), &op, qubitInputCount(&op));
       } else {
+        attachSources(*P, &op);
         addOp(*P, &op, extQubits);
       }
 
@@ -176,6 +182,7 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
               std::find_if(open.begin(), open.end(),
                            [other](const Part &x) { return &x == other; }));
         }
+        attachSources(*target, &op);
         addOp(*target, &op, extQubits);
       } else {
         // Close only the partitions causing the overflow — largest first —
@@ -222,6 +229,7 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
 
         if (survivors.empty()) {
           open.emplace_back();
+          attachSources(open.back(), &op);
           addOp(open.back(), &op, qubitInputCount(&op));
         } else {
           Part *target = survivors[0];
@@ -237,6 +245,7 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
                 std::find_if(open.begin(), open.end(),
                              [other](const Part &x) { return &x == other; }));
           }
+          attachSources(*target, &op);
           addOp(*target, &op, extQubits);
         }
       }

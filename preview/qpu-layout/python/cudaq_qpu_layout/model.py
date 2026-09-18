@@ -18,6 +18,11 @@ wire onto an out-port, crosses to the destination region's in-port, and lands on
 a compute wire there -- the three-leg calling convention of
 `LoweringQubitsToRegions.md`. Ports are modeled as unbounded, so they contribute
 cost but never serialize movement; only compute slots are a scarce resource.
+
+Every operation takes one tick -- a gate, and each leg of a move alike. There is
+no relative cost model yet, so depth counts operations rather than weighting
+them; a crossing being dearer than a gate is a calibration to make once the
+rest of the model is settled.
 """
 
 from dataclasses import dataclass
@@ -27,9 +32,6 @@ from dataclasses import dataclass
 class QpuModel:
     num_regions: int = 2
     region_size: int = 2
-    gate_cost: int = 1   # cycles for one gate
-    move_cost: int = 4   # cycles to cross from an out-port to an in-port
-    port_cost: int = 1   # cycles between a compute wire and one of its ports
 
     def __post_init__(self):
         if self.num_regions < 1:
@@ -45,9 +47,6 @@ class QpuModel:
         return {
             "num_regions": self.num_regions,
             "region_size": self.region_size,
-            "gate_cost": self.gate_cost,
-            "move_cost": self.move_cost,
-            "port_cost": self.port_cost,
         }
 
     @staticmethod

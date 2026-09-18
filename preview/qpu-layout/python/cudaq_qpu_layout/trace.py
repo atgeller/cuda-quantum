@@ -13,14 +13,20 @@ occupancy snapshot. A consumer reconstructs the placement at any timestep by
 replaying `deltas` from an empty QPU. This is the format the visualization tool
 will read, so `SCHEMA` is versioned.
 
-A qubit occupies a *site*: `{region, kind, slot}`, where `kind` is one of the
-region's compute wires, its in-ports, or its out-ports. Ports are first-class
-locations, so a qubit crossing between regions is visibly in flight -- it leaves
-a compute wire onto an out-port, crosses to the destination's in-port, and only
-then lands on a compute wire. Gates only ever run on `compute` sites.
+A qubit occupies a *site*: `{region, kind}`, where `kind` is the region's
+compute wires, its in-ports, or its out-ports. Ports are first-class locations,
+so a qubit crossing between regions is visibly in flight -- it leaves a compute
+wire onto an out-port, crosses to the destination's in-port, and only then lands
+on a compute wire. Gates only ever run on `compute` sites.
+
+Individual wires are not identified. A region is all-to-all, so which wire a
+qubit sits on is not a question the model can answer -- and answering it anyway
+would be the model making a placement decision, which belongs to the passes.
+The `k` in the `quake.move %w to @rN[k]` those passes emit is an argument index,
+not a placement, so schema 4 records only the region.
 
     {
-      "schema": "cudaq-qpu-layout-trace/2",
+      "schema": "cudaq-qpu-layout-trace/4",
       "entry": "bell_cross",
       "model": {...},
       "steps": [ {"t": 0, "ops": [...], "moves": [...], "deltas": [...]} ],
@@ -30,7 +36,7 @@ then lands on a compute wire. Gates only ever run on `compute` sites.
 
 import json
 
-SCHEMA = "cudaq-qpu-layout-trace/3"
+SCHEMA = "cudaq-qpu-layout-trace/4"
 
 # Site kinds.
 COMPUTE = "compute"
@@ -47,8 +53,8 @@ PORT_IN = "port-in"
 PORT_KINDS = (PORT_OUT, PORT_IN)
 
 
-def site(region, kind, slot):
-    return {"region": region, "kind": kind, "slot": slot}
+def site(region, kind):
+    return {"region": region, "kind": kind}
 
 
 class TraceBuilder:
@@ -122,7 +128,9 @@ class TraceBuilder:
                     "cross": sum(1 for m in moves if m["kind"] == CROSS),
                     "port": sum(1 for m in moves if m["kind"] in PORT_KINDS),
                 },
-                "total_move_cost": sum(m["cost"] for m in moves),
+                # Every leg is one tick, so this is how many ticks the
+                # circuit spent moving qubits rather than computing.
+                "total_move_ticks": sum(m["cost"] for m in moves),
                 "region_utilization": [{
                     "region": r,
                     "peak": self.peak[r],
@@ -139,14 +147,14 @@ class TraceBuilder:
 def site_for(vq, sites):
     """An op operand's site. Gates only run on compute wires, so `kind` is
     implicit and left out."""
-    region, kind, slot = sites[vq]
-    return {"vq": vq, "region": region, "slot": slot}
+    region, _kind = sites[vq]
+    return {"vq": vq, "region": region}
 
 
 def replay(trace):
     """Reconstruct occupancy step by step from the delta stream.
 
-    Yields `(t, {vq: (region, kind, slot)})` after applying each step's deltas.
+    Yields `(t, {vq: (region, kind)})` after applying each step's deltas.
     This is how a consumer recovers the full placement the trace does not store.
     """
     pos = {}
@@ -156,7 +164,7 @@ def replay(trace):
                 pos.pop(d["vq"], None)
             else:
                 to = d["to"]
-                pos[d["vq"]] = (to["region"], to["kind"], to["slot"])
+                pos[d["vq"]] = (to["region"], to["kind"])
         yield step["t"], dict(pos)
 
 
@@ -167,4 +175,4 @@ def summarize(trace):
     return (f"entry={trace['entry']} depth={s['depth']} "
             f"vqubits={s['num_vqubits']} "
             f"moves={m['cross']}cross/{m['port']}port "
-            f"move_cost={s['total_move_cost']}")
+            f"move_ticks={s['total_move_ticks']}")

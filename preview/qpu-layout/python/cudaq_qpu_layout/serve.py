@@ -6,7 +6,7 @@
 # This source code and the accompanying materials are made available under     #
 # the terms of the Apache License 2.0 which accompanies this distribution.     #
 # ============================================================================ #
-"""Serve the trace viewer so it can be opened from outside the container.
+"""Serve the trace viewer, and a page for laying out a kernel from source.
 
 Binds 0.0.0.0 rather than localhost, which is what makes the port reachable
 from the host. Serves this directory, so `viewer.html` and any trace JSON
@@ -24,11 +24,18 @@ isn't already there.
 import argparse
 import functools
 import http.server
+import json
 import os
 import shutil
 import socketserver
+import subprocess
+import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# A submitted kernel is compiled, unrolled and laid out; a wide one is slow.
+SUBMIT_TIMEOUT = 300
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -40,6 +47,70 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         print("  %s - %s" % (self.address_string(), fmt % args), flush=True)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self.path = "/submit.html"
+        return super().do_GET()
+
+    def _json(self, payload, status=200):
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path.rstrip("/") != "/submit":
+            return self.send_error(404)
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            request = json.loads(self.rfile.read(length) or b"{}")
+        except Exception as e:
+            return self._json({"error": f"malformed request: {e}"}, 400)
+
+        code = request.get("code", "")
+        if not code.strip():
+            return self._json({"error": "no source submitted"}, 400)
+
+        # Compile and lay out in a separate process: a kernel that fails to
+        # compile, or takes the CUDA-Q runtime down with it, must not take the
+        # server too.
+        argv = [sys.executable, "-m", "cudaq_qpu_layout.fromsource",
+                "--regions", str(int(request.get("regions", 2))),
+                "--region-size", str(int(request.get("region_size", 4)))]
+        if request.get("entry"):
+            argv += ["--entry", str(request["entry"])]
+        try:
+            done = subprocess.run(argv, input=code, capture_output=True,
+                                  text=True, timeout=SUBMIT_TIMEOUT,
+                                  cwd=os.path.dirname(HERE))
+        except subprocess.TimeoutExpired:
+            return self._json({"error": f"timed out after {SUBMIT_TIMEOUT}s. "
+                                        "A kernel with many qubits or a long "
+                                        "unrolled loop can take a while."})
+        try:
+            result = json.loads(done.stdout or "{}")
+        except json.JSONDecodeError:
+            # Warnings are noise here; show what actually went wrong.
+            lines = [l for l in (done.stderr or "").splitlines()
+                     if "Warning" not in l and not l.startswith("  ")]
+            tail = "\n".join(lines).strip()[-2000:]
+            return self._json({"error": tail or "the layout run produced "
+                                                "nothing"})
+        if "error" in result:
+            return self._json(result)
+
+        from .viewer import write_viewer
+        name = "".join(c if c.isalnum() or c in "-_" else "_"
+                       for c in result.get("kernel", "kernel"))
+        stem = f"{name}-{int(time.time())}"
+        root = self.directory
+        with open(os.path.join(root, stem + ".json"), "w") as f:
+            json.dump(result["trace"], f)
+        write_viewer(result["trace"], os.path.join(root, stem + ".html"))
+        return self._json({"viewer": stem + ".html"})
 
 
 class Server(socketserver.ThreadingTCPServer):
@@ -57,10 +128,11 @@ def main():
     args = p.parse_args()
 
     root = os.path.abspath(args.dir)
-    viewer = os.path.join(root, "viewer.html")
-    if not os.path.exists(viewer):
-        shutil.copy(os.path.join(HERE, "viewer.html"), viewer)
-        print(f"copied viewer.html into {root}")
+    for page in ("viewer.html", "submit.html"):
+        dst = os.path.join(root, page)
+        if not os.path.exists(dst) or os.path.getmtime(dst) < \
+                os.path.getmtime(os.path.join(HERE, page)):
+            shutil.copy(os.path.join(HERE, page), dst)
 
     traces = sorted(f for f in os.listdir(root) if f.endswith(".json"))
 
@@ -68,6 +140,7 @@ def main():
     with Server((args.bind, args.port), handler) as httpd:
         print(f"serving {root} on {args.bind}:{args.port}\n")
         print("  open from the host:")
+        print(f"    http://localhost:{args.port}/           (lay out a kernel)")
         print(f"    http://localhost:{args.port}/viewer.html")
         for t in traces:
             print(f"    http://localhost:{args.port}/viewer.html?trace={t}")

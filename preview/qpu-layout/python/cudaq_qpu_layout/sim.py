@@ -47,11 +47,43 @@ from .model import QpuModel
 from .trace import (TraceBuilder, COMPUTE, IN, OUT, PORT_IN, PORT_OUT,
                     CROSS)
 
+# Every operation -- a gate, or one leg of a move -- takes one tick.
+TICK = 1
+
+# Which partitioner the lowering uses. `greedy-pair` forms partitions from
+# interactions alone; `greedy` weighs every op.
+import os as _os
+PARTITIONER = _os.environ.get("QPU_LAYOUT_PARTITIONER", "greedy")
+
 WIRE_TYPE = "!quake.wire"
 WIRE_SOURCES = ("quake.borrow_wire", "quake.null_wire")
 WIRE_SINKS = ("quake.return_wire", "quake.sink")
 MEASUREMENTS = ("quake.mz", "quake.my", "quake.mx")
-IGNORED = ("func.return", "cc.return", "quake.discriminate", "quake.wire_set")
+IGNORED = ("func.return", "cc.return", "quake.discriminate", "quake.wire_set",
+           "quake.region")
+
+# The region-lowering passes' output, which is what dictates placement:
+# `outline-partitions` makes each subcircuit a lambda, `assign-subcircuit-regions`
+# tags it `{region = @rN}`, and `add-region-moves` inserts the transfers.
+SUBCIRCUIT = "cc.create_lambda"
+SUBCIRCUIT_CALL = "cc.call_callable"
+MOVE = "quake.move"
+REGION_ATTR = "region"
+
+
+def _region_index(symbol):
+    """`@r3` -> 3. The passes name regions positionally."""
+    name = str(symbol).lstrip("@")
+    if not name.startswith("r") or not name[1:].isdigit():
+        raise LayoutError(f"region symbol '{symbol}' is not of the form @rN")
+    return int(name[1:])
+
+
+def _attr(op, name):
+    try:
+        return op.attributes[name]
+    except KeyError:
+        return None
 
 
 class LayoutError(RuntimeError):
@@ -64,19 +96,28 @@ class LayoutError(RuntimeError):
 
 
 class Placement:
-    """Which virtual qubit occupies which site.
+    """Which virtual qubit is in which region, and whether it is on a port.
 
-    A site is `(region, kind, slot)`. Compute wires are the scarce resource,
-    bounded by `region_size`; ports are unbounded, so a port slot is handed out
-    on demand.
+    A site is `(region, kind)`. Wires inside a region are deliberately not
+    identified: the region is all-to-all, so which one a qubit sits on is not a
+    question the model can answer, and answering it anyway would be the model
+    making a placement decision the passes are supposed to own. Only the count
+    is real, and it is what `region_size` bounds.
+
+    What is still tracked per wire is when each comes free, since a qubit cannot
+    land on a wire its predecessor has not left yet; `free_times` holds those
+    instants without naming the wires they belong to.
     """
 
     def __init__(self, model):
         self.model = model
-        self.pos = {}  # vq -> (region, kind, slot)
-        self.sites = [{COMPUTE: {}, IN: {}, OUT: {}}
-                      for _ in range(model.num_regions)]
-        self.free_at = {}  # site -> timestep at which it becomes available
+        self.pos = {}  # vq -> (region, kind)
+        self.occupants = {}  # (region, kind) -> {vq}
+        self.free_times = {}  # region -> one entry per unoccupied compute wire
+        for region in range(model.num_regions):
+            for kind in (COMPUTE, IN, OUT):
+                self.occupants[(region, kind)] = set()
+            self.free_times[region] = [0] * model.region_size
 
     def region_of(self, vq):
         return self.pos[vq][0]
@@ -84,98 +125,70 @@ class Placement:
     def kind_of(self, vq):
         return self.pos[vq][1]
 
-    def slot_of(self, vq):
-        return self.pos[vq][2]
-
-    def free_compute_slots(self, region):
-        taken = self.sites[region][COMPUTE]
-        return [s for s in range(self.model.region_size) if s not in taken]
-
-    def next_port(self, region, kind):
-        """Ports are unbounded; hand out the lowest unused index."""
-        taken = self.sites[region][kind]
-        slot = 0
-        while slot in taken:
-            slot += 1
-        return slot
+    def has_room(self, region):
+        return len(self.occupants[(region, COMPUTE)]) < self.model.region_size
 
     def residents(self, region):
-        """The qubits on this region's compute wires."""
-        return list(self.sites[region][COMPUTE].values())
+        return list(self.occupants[(region, COMPUTE)])
 
     def occupancy(self, region):
-        return len(self.sites[region][COMPUTE])
+        return len(self.occupants[(region, COMPUTE)])
 
-    def available_at(self, site):
-        """When a site last emptied -- nothing may land there before then."""
-        return self.free_at.get(site, 0)
+    def available_at(self, region, kind):
+        """The earliest a qubit may land here.
 
-    def assign(self, vq, region, kind, slot):
-        self.pos[vq] = (region, kind, slot)
-        self.sites[region][kind][slot] = vq
+        Ports are unbounded, so one is always free. For a compute wire this is
+        whichever has been free longest -- the model does not care which.
+        """
+        if kind != COMPUTE:
+            return 0
+        free = self.free_times[region]
+        return min(free) if free else 0
 
-    def relocate(self, vq, region, kind, slot, vacated_at=0):
+    def _take_wire(self, region, kind):
+        if kind != COMPUTE:
+            return
+        free = self.free_times[region]
+        if not free:
+            raise LayoutError(
+                f"r{region} has no free compute wire "
+                f"(region_size={self.model.region_size})")
+        free.remove(min(free))
+
+    def _release_wire(self, region, kind, vacated_at):
+        if kind == COMPUTE:
+            self.free_times[region].append(vacated_at)
+
+    def assign(self, vq, region, kind):
+        self._take_wire(region, kind)
+        self.pos[vq] = (region, kind)
+        self.occupants[(region, kind)].add(vq)
+
+    def relocate(self, vq, region, kind, vacated_at=0):
         old = self.pos[vq]
-        del self.sites[old[0]][old[1]][old[2]]
-        self.free_at[old] = vacated_at
-        self.assign(vq, region, kind, slot)
+        self.occupants[old].discard(vq)
+        self._release_wire(old[0], old[1], vacated_at)
+        self.assign(vq, region, kind)
         return old
 
     def release(self, vq, vacated_at=0):
         old = self.pos.pop(vq)
-        del self.sites[old[0]][old[1]][old[2]]
-        self.free_at[old] = vacated_at
+        self.occupants[old].discard(vq)
+        self._release_wire(old[0], old[1], vacated_at)
         return old
 
 
-# ===----------------------------------------------------------------------=== #
-# Policies
-# ===----------------------------------------------------------------------=== #
+class Mover:
+    """Costs out the moves the IR asks for. It decides nothing.
 
-
-class FirstFitPlacer:
-    """Interaction-aware first fit.
-
-    A qubit whose first use entangles it with an already-placed partner is put
-    in that partner's region, so an interaction never costs a move if capacity
-    allows. Otherwise it takes the first region with room.
+    `add-region-moves` emits the three legs a region crossing takes -- off the
+    compute wire onto an out-port, across to the destination's in-port, then
+    onto a compute wire there -- so each `quake.move` is one leg. This turns
+    each into a tick and a trace entry; where a qubit goes, and by which route,
+    was settled by the passes.
     """
 
-    def __init__(self, model, placement):
-        self.model = model
-        self.placement = placement
-
-    def place(self, vq, partners):
-        preferred = [self.placement.region_of(p)
-                     for p in partners
-                     if p in self.placement.pos]
-        order = preferred + [r for r in range(self.model.num_regions)
-                             if r not in preferred]
-        for region in order:
-            free = self.placement.free_compute_slots(region)
-            if free:
-                self.placement.assign(vq, region, COMPUTE, free[0])
-                return (region, COMPUTE, free[0])
-        raise LayoutError(
-            f"no free slot for virtual qubit {vq}: all {self.model.num_regions} "
-            f"regions of size {self.model.region_size} are full "
-            f"(capacity {self.model.capacity})")
-
-
-class Router:
-    """Emits the moves that bring an op's operands together.
-
-    Every operand is drawn into one destination region. Regions are all-to-all,
-    so once co-located the operands interact directly -- nothing moves within a
-    region. Intra-region topology, when it is modeled, belongs here as a move,
-    never as a swap.
-
-    A region is only entered and left through its ports, so drawing a qubit into
-    a region is always three legs -- compute wire onto an out-port, out-port
-    across to the destination's in-port, in-port onto a compute wire. When the
-    destination is full an idle resident vacates onto an out-port first; it is
-    still live, so it must then be carried to a compute wire somewhere else.
-    """
+    KINDS = {OUT: PORT_OUT, IN: CROSS, COMPUTE: PORT_IN}
 
     def __init__(self, model, placement, scheduler, builder):
         self.model = model
@@ -183,87 +196,21 @@ class Router:
         self.sched = scheduler
         self.builder = builder
 
-    def route(self, operands):
-        if len(operands) < 2:
-            return
-        dest = self._choose_region(operands)
-        for vq in operands:
-            if self.placement.region_of(vq) != dest:
-                self._move_into(vq, dest, operands)
-
-    def _choose_region(self, operands):
-        """The region already holding the most operands; ties go to the first."""
-        counts = {}
-        for vq in operands:
-            r = self.placement.region_of(vq)
-            counts[r] = counts.get(r, 0) + 1
-        best = max(counts.values())
-        for vq in operands:
-            r = self.placement.region_of(vq)
-            if counts[r] == best:
-                return r
-
-    def _leg(self, vq, kind, dest_region, dest_kind, dest_slot, cost):
-        """One leg of a move. Waits for both the qubit and the target site."""
-        site = (dest_region, dest_kind, dest_slot)
-        t = max(self.sched.time_for([vq]), self.placement.available_at(site))
-        src = self.placement.relocate(vq, *site, vacated_at=t + cost)
-        self.builder.move(t, vq, kind, src, site, cost)
-        self.sched.commit([vq], t, cost)
-        self.builder.observe_occupancy(dest_region,
-                                       self.placement.occupancy(dest_region))
-
-    def _park_out(self, vq):
-        """Compute wire -> out-port: the explicit act that keeps a qubit alive
-        when it must give up its slot."""
-        region = self.placement.region_of(vq)
-        self._leg(vq, PORT_OUT, region, OUT,
-                  self.placement.next_port(region, OUT), self.model.port_cost)
-
-    def _land_from_out(self, vq, dest, slot):
-        """Out-port -> destination in-port -> destination compute wire."""
-        self._leg(vq, CROSS, dest, IN, self.placement.next_port(dest, IN),
-                  self.model.move_cost)
-        self._leg(vq, PORT_IN, dest, COMPUTE, slot, self.model.port_cost)
-
-    def _move_into(self, vq, dest, operands):
-        free = self.placement.free_compute_slots(dest)
-        if free:
-            self._park_out(vq)
-            self._land_from_out(vq, dest, free[0])
-            return
-
-        # The region is full, so an idle resident must vacate onto an out-port
-        # before the incoming qubit can land on its wire.
-        idle = [r for r in self.placement.residents(dest) if r not in operands]
-        if not idle:
+    def move(self, vq, region, kind):
+        """Execute one leg of a move: `quake.move %w to @rN [in|out]`."""
+        if kind == COMPUTE and not self.placement.has_room(region):
             raise LayoutError(
-                f"region {dest} holds only operands of the current operation; "
-                f"cannot bring virtual qubit {vq} in "
+                f"the IR moves virtual qubit {vq} onto a compute wire of "
+                f"r{region}, which is full "
                 f"(region_size={self.model.region_size})")
-        evicted = idle[0]
-        slot = self.placement.slot_of(evicted)
-
-        self._park_out(evicted)
-        self._park_out(vq)
-        self._land_from_out(vq, dest, slot)
-        self._rehome(evicted)
-
-    def _rehome(self, vq):
-        """Carry a qubit waiting on an out-port to a compute wire with room.
-
-        A qubit parked on a port is in transit, not stored: keeping it alive
-        means landing it somewhere it can next be used.
-        """
-        for region in range(self.model.num_regions):
-            free = self.placement.free_compute_slots(region)
-            if free:
-                self._land_from_out(vq, region, free[0])
-                return
-        raise LayoutError(
-            f"virtual qubit {vq} was displaced but no region has a free compute "
-            f"wire to receive it; the QPU is at capacity "
-            f"({self.model.capacity} qubits)")
+        # Scheduling is the one thing still decided here: a leg runs as soon as
+        # the qubit is free and the site it lands on has been vacated.
+        t = max(self.sched.time_for([vq]),
+                self.placement.available_at(region, kind))
+        src = self.placement.relocate(vq, region, kind, vacated_at=t + TICK)
+        self.builder.move(t, vq, self.KINDS[kind], src, (region, kind), TICK)
+        self.sched.commit([vq], t, TICK)
+        self.builder.observe_occupancy(region, self.placement.occupancy(region))
 
 
 class AsapScheduler:
@@ -316,7 +263,12 @@ def _find_entrypoint(module):
 
 
 def _check_straight_line(func):
-    """Reject anything the model cannot cost: branches and unrolled-away loops."""
+    """Reject anything the model cannot cost: branches and unrolled-away loops.
+
+    A subcircuit lambda is the one nested region allowed through: its body is
+    straight-line code that runs where the `cc.call_callable` says it does, so
+    the walker inlines it at the call rather than treating it as control flow.
+    """
     body = func.regions[0]
     if len(body.blocks) > 1:
         raise LayoutError(
@@ -325,7 +277,7 @@ def _check_straight_line(func):
             "straight-line kernels only. Lower with a pipeline that fully "
             "unrolls loops and flattens branches.")
     for op in _children(func):
-        if op.regions:
+        if op.regions and op.name != SUBCIRCUIT:
             raise LayoutError(
                 f"'{op.name}' carries a nested region; the layout simulator "
                 "handles straight-line kernels only. Lower with a pipeline "
@@ -354,10 +306,11 @@ class Simulator:
         self.builder = TraceBuilder(model)
         self.placement = Placement(model)
         self.sched = AsapScheduler()
-        self.placer = FirstFitPlacer(model, self.placement)
-        self.router = Router(model, self.placement, self.sched, self.builder)
+        self.mover = Mover(model, self.placement, self.sched, self.builder)
         self.vq_of = {}  # MLIR wire Value -> virtual qubit id
         self._next_vq = 0
+        self.subcircuits = {}  # callable Value -> its cc.create_lambda op
+        self.region = 0  # the region whose subcircuit is executing
 
     # -- virtual qubit identity, recovered from the SSA data flow -------------
 
@@ -395,8 +348,24 @@ class Simulator:
     def _visit(self, op):
         name = op.name
 
+        if name == SUBCIRCUIT:
+            # The body runs at the call, in the region this lambda is tagged
+            # with; remember it until then.
+            self.subcircuits[op.results[0]] = op
+            return
+
+        if name == SUBCIRCUIT_CALL:
+            self._call_subcircuit(op)
+            return
+
+        if name == MOVE:
+            self._move(op)
+            return
+
         if name in WIRE_SOURCES:
-            self._new_vq(op.results[0])
+            # A qubit born inside a subcircuit belongs to that subcircuit's
+            # region, which is all the IR says and all the model needs.
+            self._place(self._new_vq(op.results[0]), self.region)
             return
 
         if name in WIRE_SINKS:
@@ -417,6 +386,81 @@ class Simulator:
 
         self._gate(op, view)
 
+    def _call_subcircuit(self, op):
+        """Run a subcircuit's body in the region the passes assigned it."""
+        lambda_op = self.subcircuits.get(op.operands[0])
+        if lambda_op is None:
+            raise LayoutError(
+                "cc.call_callable does not refer to a subcircuit this walker "
+                "has seen; run region-to-func or keep lambdas in place")
+        region_attr = _attr(lambda_op, REGION_ATTR)
+        if region_attr is None:
+            raise LayoutError(
+                "subcircuit has no {region} attribute; run "
+                "assign-subcircuit-regions before the layout model")
+
+        body = lambda_op.regions[0].blocks[0]
+        # The call's wire arguments become the body's block arguments.
+        args = [o for o in op.operands[1:] if _is_wire(o)]
+        for arg, value in zip(body.arguments, args):
+            self.vq_of[arg] = self._vq(value)
+
+        outer, self.region = self.region, _region_index(region_attr)
+        try:
+            for inner in body.operations:
+                self._visit(inner.operation)
+        finally:
+            self.region = outer
+
+        # The body's terminator operands become the call's results.
+        returned = [o for o in body.operations[len(body.operations) - 1]
+                    .operation.operands if _is_wire(o)]
+        for value, result in zip(returned, op.results):
+            if _is_wire(result):
+                self.vq_of[result] = self._vq(value)
+
+    def _move(self, op):
+        """`quake.move` -- the transfer the passes asked for, costed out."""
+        vq = self._vq(op.operands[0])
+        region = _region_index(_attr(op, "dest_region"))
+        kind_attr = _attr(op, "dest_kind")
+        # The IR names the region's array: `wires`, `in` or `out`. A move with
+        # no array named is the compute wires, which is what a bare `@rN[k]`
+        # meant before ports were addressable.
+        named = str(kind_attr).strip('"') if kind_attr is not None else "wires"
+        kind = {"wires": COMPUTE, "in": IN, "out": OUT}.get(named)
+        if kind is None:
+            raise LayoutError(
+                f"quake.move names destination array '{named}'; expected "
+                f"wires, in or out")
+
+        if vq not in self.placement.pos:
+            # First use: the qubit comes into being here rather than arriving,
+            # so it is placed outright and pays no port legs.
+            if kind != COMPUTE:
+                raise LayoutError(
+                    f"virtual qubit {vq} is first used on r{region}'s {kind}-"
+                    f"port; a qubit begins life on a compute wire")
+            self._place(vq, region)
+        else:
+            self.mover.move(vq, region, kind)
+        self._thread(op)
+
+    def _place(self, vq, region):
+        """A qubit's first placement: onto a compute wire, no movement."""
+        if not self.placement.has_room(region):
+            raise LayoutError(
+                f"the IR places virtual qubit {vq} in r{region}, which is "
+                f"full (region_size={self.model.region_size})")
+        # A wire another qubit has only just vacated is not free until then, so
+        # the placement cannot be stamped earlier than that.
+        avail = self.placement.available_at(region, COMPUTE)
+        self.placement.assign(vq, region, COMPUTE)
+        self.sched.ready[vq] = max(self.sched.ready_time(vq), avail)
+        self.builder.delta(self.sched.time_for([vq]), "assign", vq,
+                           dst=(region, COMPUTE))
+        self.builder.observe_occupancy(region, self.placement.occupancy(region))
+
     def _gate(self, op, view):
         # Measurements carry `targets` but no `controls` group.
         controls = [self._vq(c) for c in getattr(view, "controls", [])
@@ -425,36 +469,93 @@ class Simulator:
         operands = controls + targets
         params = [_constant_of(p) for p in getattr(view, "parameters", [])]
 
-        # Place on first use, hinting with the qubits this op entangles it with.
-        for vq in operands:
-            if vq not in self.placement.pos:
-                others = [o for o in operands if o != vq]
-                site = self.placer.place(vq, others)
-                # A wire another qubit has just vacated is not free until then.
-                self.sched.ready[vq] = max(self.sched.ready_time(vq),
-                                           self.placement.available_at(site))
-                self.builder.delta(self.sched.time_for(operands), "assign", vq,
-                                   dst=site)
-                self.builder.observe_occupancy(
-                    site[0], self.placement.occupancy(site[0]))
-
-        self.router.route(operands)
+        # Placement is the passes' decision, so a gate does not move anything:
+        # if its operands are not already together, the region assignment and
+        # the moves disagree with the circuit and that is worth reporting, not
+        # silently repairing.
+        unplaced = [vq for vq in operands if vq not in self.placement.pos]
+        if unplaced:
+            raise LayoutError(
+                f"{op.name} acts on virtual qubit(s) {unplaced} that the IR "
+                f"never placed; run add-region-moves before the layout model")
+        regions = {self.placement.region_of(vq) for vq in operands}
+        if len(regions) > 1:
+            raise LayoutError(
+                f"{op.name} acts across regions {sorted(regions)}; the IR did "
+                f"not move its operands together")
+        off_wire = [vq for vq in operands
+                    if self.placement.kind_of(vq) != COMPUTE]
+        if off_wire:
+            raise LayoutError(
+                f"{op.name} acts on virtual qubit(s) {off_wire} parked on a "
+                f"port; a gate only runs on a compute wire")
 
         t = self.sched.time_for(operands)
         gate = op.name.split(".", 1)[1]
         self.builder.op(t, gate, self.placement.region_of(operands[0]),
                         controls, targets, params, self.placement.pos)
-        self.sched.commit(operands, t, self.model.gate_cost)
+        self.sched.commit(operands, t, TICK)
         if op.name in MEASUREMENTS:
             self.builder.num_measurements += 1
         self._thread(op)
+
+
+def region_pipeline(model):
+    """The region-lowering chain, sized from `model`.
+
+    How many regions there are and how big they are is a property of the QPU
+    being modelled, so it belongs to the model rather than to a payload -- the
+    same circuit laid out on a different QPU has to be re-partitioned, not just
+    re-scheduled.
+    """
+    # A partition may be as wide as a region can hold: any narrower and an
+    # operation that would fit is split across regions for no reason.
+    return ("builtin.module("
+            f"func.func(outline-partitions{{strategy={PARTITIONER} "
+            f"max-qubits={model.region_size}}}),"
+            f"introduce-regions{{num-regions={model.num_regions} "
+            f"region-size={model.region_size}}},"
+            "func.func(assign-subcircuit-regions,add-region-moves)"
+            ")")
+
+
+def _is_region_lowered(module):
+    return any(op.name == "quake.region" for op in _children(module.operation))
+
+
+def lower_onto_regions(module, model):
+    """Give the payload a placement, if it does not already carry one.
+
+    The model consumes `{region = @rN}` and `quake.move`; a payload that has
+    already been through the passes keeps the assignment it was lowered with,
+    which is how a hand-written or pre-lowered placement can be replayed.
+    """
+    if _is_region_lowered(module):
+        return module
+    from cudaq.mlir.passmanager import PassManager
+    pm = PassManager.parse(region_pipeline(model), context=module.context)
+    try:
+        pm.run(module.operation)
+    except Exception as e:
+        raise LayoutError(
+            f"failed to lower the payload onto {model.num_regions} regions of "
+            f"{model.region_size}: {e}") from e
+    return module
 
 
 def simulate_module(module, model=None):
     """Lay an already-parsed Quake module out on `model`."""
     if not module.operation.verify():
         raise LayoutError("Quake module failed verification before layout")
-    return Simulator(model or QpuModel()).run(module)
+    model = model or QpuModel()
+    entry = _find_entrypoint(module)
+    if entry is None:
+        raise LayoutError("no `cudaq-entrypoint` function found in payload")
+    # Before lowering, not after: `outline-partitions` assumes straight-line
+    # code and crashes rather than diagnosing when given a loop, so the payload
+    # has to be rejected here while it still can be.
+    _check_straight_line(entry)
+    return Simulator(model).run(lower_onto_regions(module, model))
 
 
 def simulate(mlir_text, model=None, context=None):
@@ -471,18 +572,32 @@ def main():
     p.add_argument("payload", nargs="?", help="Quake MLIR file (default: stdin)")
     p.add_argument("--regions", type=int, default=2)
     p.add_argument("--region-size", type=int, default=2)
-    p.add_argument("--move-cost", type=int, default=4)
     p.add_argument("-o", "--output", help="write the trace JSON here")
     p.add_argument("--viewer", metavar="PATH",
                    help="write a standalone HTML viewer with the trace embedded")
+    p.add_argument("--dump-ir", metavar="PATH", nargs="?", const="-",
+                   help="write the region-lowered IR the model reads, then "
+                        "carry on (default: stdout)")
     p.add_argument("-q", "--quiet", action="store_true",
                    help="print only the summary line")
     args = p.parse_args()
 
     model = QpuModel(num_regions=args.regions,
-                     region_size=args.region_size,
-                     move_cost=args.move_cost)
+                     region_size=args.region_size)
     src = open(args.payload).read() if args.payload else sys.stdin.read()
+    if args.dump_ir:
+        # Exactly what the model walks: the payload after being lowered onto
+        # this model's regions, which is where every placement and move it
+        # reads comes from.
+        from cudaq.mlir.ir import Module as _Module
+        module = lower_onto_regions(
+            _Module.parse(src, context=getMLIRContext()), model)
+        if args.dump_ir == "-":
+            print(module)
+        else:
+            with open(args.dump_ir, "w") as f:
+                f.write(str(module))
+            print("ir: " + args.dump_ir)
     builder = simulate(src, model)
     doc = builder.to_json()
     if args.output:

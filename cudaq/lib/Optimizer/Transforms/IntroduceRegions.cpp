@@ -53,7 +53,8 @@ public:
         continue;
       builder.create<cudaq::quake::RegionOp>(
           mod.getLoc(), builder.getStringAttr(name),
-          builder.getI32IntegerAttr(static_cast<int32_t>(regionSize)));
+          builder.getI32IntegerAttr(static_cast<int32_t>(regionSize)),
+          device.empty() ? StringAttr{} : builder.getStringAttr(device));
     }
   }
 };

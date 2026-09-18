@@ -1,0 +1,162 @@
+<!doctype html>
+<!-- =========================================================================== #
+ Copyright (c) 2022 - 2026 NVIDIA Corporation & Affiliates.
+ All rights reserved.
+
+ This source code and the accompanying materials are made available under
+ the terms of the Apache License 2.0 which accompanies this distribution.
+# ========================================================================== -->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CUDA-Q QPU layout</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-0: #f5f4f1; --surface-1: #fcfcfb; --surface-2: #efeeea;
+    --hairline: #e0dfda; --text-primary: #0b0b0b; --text-secondary: #52514e;
+    --text-muted: #85837c; --series-1: #2a78d6; --series-2: #eb6834;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-0: #111110; --surface-1: #1a1a19; --surface-2: #262625;
+      --hairline: #383835; --text-primary: #fff; --text-secondary: #c3c2b7;
+      --text-muted: #8f8e85; --series-1: #3987e5; --series-2: #d95926;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root {
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+    background: var(--surface-0); color: var(--text-primary);
+    min-height: 100vh; padding: 24px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 19px; font-weight: 600; margin: 0 0 2px; }
+  .sub { color: var(--text-secondary); margin: 0 0 20px; }
+  textarea {
+    width: 100%; min-height: 340px; padding: 12px;
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--hairline); border-radius: 9px; resize: vertical;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+         margin: 14px 0; }
+  label { display: block; font-size: 12px; color: var(--text-secondary);
+          margin-bottom: 4px; }
+  input[type=number], select {
+    font: inherit; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--hairline); border-radius: 7px; padding: 6px 9px;
+    min-height: 34px; width: 110px;
+  }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--series-1);
+    border: 1px solid transparent; border-radius: 7px; padding: 8px 18px;
+    min-height: 36px; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .spacer { flex: 1 1 auto; }
+  .err {
+    border: 1px solid var(--series-2); border-left-width: 3px;
+    background: var(--surface-1); border-radius: 7px; padding: 10px 12px;
+    margin-top: 14px; white-space: pre-wrap;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .note { color: var(--text-muted); font-size: 12px; margin-top: 18px; }
+  .note code { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<div class="wrap">
+
+  <h1>QPU layout</h1>
+  <p class="sub">Lay a CUDA-Q kernel out on a region-based QPU.</p>
+
+  <textarea id="code" spellcheck="false" aria-label="CUDA-Q kernel source">
+import cudaq
+
+
+@cudaq.kernel
+def bell_chain():
+    q = cudaq.qvector(6)
+    h(q[0])
+    for i in range(5):
+        x.ctrl(q[i], q[i + 1])
+    mz(q)
+</textarea>
+
+  <div class="row">
+    <div>
+      <label for="regions">Regions</label>
+      <input type="number" id="regions" min="1" max="64" value="3">
+    </div>
+    <div>
+      <label for="size">Wires per region</label>
+      <input type="number" id="size" min="1" max="64" value="4">
+    </div>
+    <div>
+      <label for="entry">Kernel</label>
+      <input type="text" id="entry" placeholder="(last one)" style="width:150px">
+    </div>
+    <span class="spacer"></span>
+    <button id="go">Lay out</button>
+  </div>
+
+  <div id="error" class="err" hidden></div>
+
+  <p class="note">
+    The kernel must take no arguments and stand alone &mdash; CUDA-Q lifts
+    module-level values and calls to sibling kernels into runtime arguments,
+    which leaves nothing concrete to lay out. Loops are unrolled for you.
+  </p>
+
+</div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fail(message) {
+    var box = $("error");
+    box.hidden = false;
+    box.textContent = message;
+    $("go").disabled = false;
+    $("go").textContent = "Lay out";
+  }
+
+  $("go").addEventListener("click", function () {
+    $("error").hidden = true;
+    $("go").disabled = true;
+    $("go").textContent = "Laying out…";
+    fetch("submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: $("code").value,
+        regions: +$("regions").value,
+        region_size: +$("size").value,
+        entry: $("entry").value.trim()
+      })
+    }).then(function (r) {
+      return r.json();
+    }).then(function (d) {
+      if (d.error) return fail(d.error);
+      // The server wrote a standalone viewer for this trace; go read it.
+      window.location = d.viewer;
+    }).catch(function (e) {
+      fail("Could not reach the layout server: " + e);
+    });
+  });
+
+  // Ctrl/Cmd-Enter submits, the way a console would.
+  $("code").addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("go").click();
+  });
+})();
+</script>
+</body>
+</html>

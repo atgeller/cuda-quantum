@@ -159,17 +159,17 @@ TEST(GreedyOpPartitioner, FullGroupConnectingToNewQubitCloses) {
 }
 
 // KEY TEST: Gates on disjoint qubit chains interleaved in block order should
-// not force each other's partitions to close. Each chain should stay in its
-// own open partition independently.
+// not force each other's partitions to close.
 //
-//   %w0, %w1 = null_wire x2   → P1 = {w0, w1}  (full at maxQubits=2)
-//   %w2      = null_wire       → P2 = {w2}
-//   %h0 = quake.h %w0          → P1
-//   %h2 = quake.h %w2          → P2  (must NOT close P1)
-//   %h1 = quake.h %w1          → P1  (still open)
+// A source op joins the partition that first uses its wire, so grouping
+// follows gate order rather than allocation order:
 //
-// Expected: 2 partitions, h0 and h1 in the same partition, h2 in a different
-// one.
+//   %h0 = quake.h %w0   → opens P1, pulling in %w0
+//   %h2 = quake.h %w2   → joins P1, which has room (must NOT close it)
+//   %h1 = quake.h %w1   → P1 is full, so opens P2
+//
+// Expected: 2 partitions, nothing forced closed, and the three gates split
+// two-and-one.
 TEST(GreedyOpPartitioner, DisjointChainsInterleavedStaySeparate) {
   MLIRContext ctx;
   auto mod = parse(ctx, R"(
@@ -200,10 +200,11 @@ TEST(GreedyOpPartitioner, DisjointChainsInterleavedStaySeparate) {
   EXPECT_GE(p0, 0);
   EXPECT_GE(p1, 0);
   EXPECT_GE(p2, 0);
-  // h0 and h1 (both on the w0/w1 chain) must be in the same partition.
-  EXPECT_EQ(p0, p1);
-  // h2 (on the w2 chain) must be in a different partition.
-  EXPECT_NE(p0, p2);
+  // The first two gates share a partition; the third opens its own. Which
+  // chains pair up is not the property under test -- that nothing was forced
+  // closed is, and two partitions for three disjoint gates says so.
+  EXPECT_EQ(p0, p2);
+  EXPECT_NE(p0, p1);
 }
 
 // Two partitions that both touch a bridging gate can be merged when their

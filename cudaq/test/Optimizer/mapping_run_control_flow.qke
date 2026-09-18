@@ -19,10 +19,10 @@
 
 module attributes {quake.cudaq_run} {
   quake.wire_set @wires[2147483647] attributes {sym_visibility = "private"}
-  func.func @kernel.run() attributes {"cudaq-entrypoint", "cudaq-kernel", quake.cudaq_run = [!cc.stdvec<i1>]} {
+  func.func @kernel.run() attributes {"cudaq-entrypoint", "cudaq-kernel", quake.cudaq_run = [!cc.sequence<i1>]} {
     %c1_i64 = arith.constant 1 : i64
     %true = arith.constant 1 : i1
-    %0 = cc.scope -> (!cc.stdvec<i1>) {
+    %0 = cc.scope -> (!cc.sequence<i1>) {
       %3 = quake.borrow_wire @wires[0] : !quake.wire
       %6 = quake.borrow_wire @wires[3] : !quake.wire
       %7 = quake.h %3 : (!quake.wire) -> !quake.wire
@@ -41,13 +41,13 @@ module attributes {quake.cudaq_run} {
       %12 = cc.cast unsigned %r#1 : (i1) -> i8
       cc.store %12, %11 : !cc.ptr<i8>
       %22 = cc.cast %9 : (!cc.ptr<!cc.array<i8 x 1>>) -> !cc.ptr<!cc.array<i8 x ?>>
-      %23 = cc.stdvec_init %22, %c1_i64 : (!cc.ptr<!cc.array<i8 x ?>>, i64) -> !cc.stdvec<i1>
+      %23 = cc.sequence_init %22, %c1_i64 : (!cc.ptr<!cc.array<i8 x ?>>, i64) -> !cc.sequence<i1>
       quake.return_wire %r#0 : !quake.wire
       quake.return_wire %8#1 : !quake.wire
-      cc.continue %23 : !cc.stdvec<i1>
+      cc.continue %23 : !cc.sequence<i1>
     }
-    %1 = cc.stdvec_size %0 : (!cc.stdvec<i1>) -> i64
-    %2 = cc.stdvec_data %0 : (!cc.stdvec<i1>) -> !cc.ptr<i8>
+    %1 = cc.sequence_size %0 : (!cc.sequence<i1>) -> i64
+    %2 = cc.sequence_data %0 : (!cc.sequence<i1>) -> !cc.ptr<i8>
     call @__quantum__rt__bool_span_record_output(%2, %1) : (!cc.ptr<i8>, i64) -> ()
     return
   }
@@ -59,7 +59,7 @@ module attributes {quake.cudaq_run} {
 // the measurement stays inside both branches of the cc.if and yields its wire
 // and discriminated bit, and the returned-vector plumbing is preserved.
 // CHECK-LABEL:   func.func @kernel.run() attributes {"cudaq-entrypoint", "cudaq-kernel", mapping_reorder_idx = {{.*}}, mapping_v2p = {{.*}}, quake.cudaq_run = {{.*}}} {
-// CHECK:           %[[VAL_0:.*]] = cc.scope -> (!cc.stdvec<i1>) {
+// CHECK:           %[[VAL_0:.*]] = cc.scope -> (!cc.sequence<i1>) {
 // CHECK:             quake.borrow_wire @mapped_wireset[{{[0-9]+}}] : !quake.wire
 // CHECK:             quake.borrow_wire @mapped_wireset[{{[0-9]+}}] : !quake.wire
 // CHECK:             quake.borrow_wire @mapped_wireset[{{[0-9]+}}] : !quake.wire
@@ -79,8 +79,8 @@ module attributes {quake.cudaq_run} {
 // CHECK:             }
 // CHECK:             cc.store %{{.*}}, %{{.*}} : !cc.ptr<i8>
 // CHECK:             quake.return_wire %[[IF]]#0 : !quake.wire
-// CHECK:             cc.continue %{{.*}} : !cc.stdvec<i1>
+// CHECK:             cc.continue %{{.*}} : !cc.sequence<i1>
 // CHECK:           }
-// CHECK:           cc.stdvec_size %[[VAL_0]]
+// CHECK:           cc.sequence_size %[[VAL_0]]
 // CHECK:           call @__quantum__rt__bool_span_record_output
 // CHECK:           return

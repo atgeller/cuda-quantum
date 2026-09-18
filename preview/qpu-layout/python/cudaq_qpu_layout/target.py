@@ -98,6 +98,8 @@ class QpuLayoutEndpoint(RuntimeEndpoint):
         except Exception as e:
             raise RuntimeError(
                 f"Failed to unroll the layout payload: {e}\n{mlir}") from e
+        # simulate_module lowers onto the model's regions itself, so the
+        # endpoint and the standalone CLI place a circuit the same way.
         return simulate_module(mlir, self.model)
 
 

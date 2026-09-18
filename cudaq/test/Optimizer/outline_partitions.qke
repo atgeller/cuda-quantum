@@ -18,9 +18,9 @@
 // CHECK:           quake.h
 // CHECK:           quake.t
 // CHECK:         } : !cc.callable<() -> !quake.wire>
-// CHECK:         cc.call_callable %[[L]]() :
+// CHECK:         cc.call_callable %[[L]] :
+// Exactly one partition: the CHECK-NOT runs to the next CHECK-LABEL.
 // CHECK-NOT:     cc.create_lambda
-// CHECK-LABEL:   func.func @disjoint_chains
 func.func @single_chain() {
   %w0 = quake.null_wire
   %h = quake.h %w0 : (!quake.wire) -> !quake.wire
@@ -29,12 +29,15 @@ func.func @single_chain() {
 }
 
 // ---------------------------------------------------------------------------
-// Two independent wire chains interleaved in block order. The greedy
-// partitioner keeps w0/w1 together in P1 and w2 in P2 without treating
-// h(%w2) — which appears between h(%w0) and h(%w1) — as a disruption.
+// Two independent wire chains interleaved in block order, at max-qubits=2.
 //
-// P1 (null_wire×2, h×2, cx) → () → (!quake.wire, !quake.wire)
-// P2 (null_wire, h)          → () → !quake.wire
+// A source op joins the partition that first uses its wire, so the grouping
+// follows the order the gates appear, not the order the wires were allocated:
+// h(%w0) opens P1 and h(%w2) joins it because there is room, which pushes
+// h(%w1) into P2 and leaves the closing cx to bridge them.
+//
+// P1 (null_wire×2, h×2)      → () → (!quake.wire, !quake.wire)
+// P2 (null_wire, h, cx)      → (!quake.wire) → (!quake.wire, !quake.wire)
 //
 // CHECK-LABEL: func.func @disjoint_chains
 // CHECK:         %[[L1:.*]] = cc.create_lambda {
@@ -42,14 +45,15 @@ func.func @single_chain() {
 // CHECK:           quake.null_wire
 // CHECK:           quake.h
 // CHECK:           quake.h
-// CHECK:           quake.x
 // CHECK:         } : !cc.callable<() -> (!quake.wire, !quake.wire)>
-// CHECK:         cc.call_callable %[[L1]]() :
+// CHECK:         %[[C1:.*]]:2 = cc.call_callable %[[L1]] :
 // CHECK:         %[[L2:.*]] = cc.create_lambda {
+// CHECK:         ^bb0(%[[ARG:.*]]: !quake.wire):
 // CHECK:           quake.null_wire
 // CHECK:           quake.h
-// CHECK:         } : !cc.callable<() -> !quake.wire>
-// CHECK:         cc.call_callable %[[L2]]() :
+// CHECK:           quake.x [%[[ARG]]]
+// CHECK:         } : !cc.callable<(!quake.wire) -> (!quake.wire, !quake.wire)>
+// CHECK:         cc.call_callable %[[L2]], %[[C1]]#0 :
 func.func @disjoint_chains() {
   %w0 = quake.null_wire
   %w1 = quake.null_wire
@@ -75,13 +79,13 @@ func.func @disjoint_chains() {
 // CHECK:           quake.null_wire
 // CHECK:           quake.x
 // CHECK:         } : !cc.callable<() -> (!quake.wire, !quake.wire)>
-// CHECK:         %[[C1:.*]]:2 = cc.call_callable %[[L1]]() :
+// CHECK:         %[[C1:.*]]:2 = cc.call_callable %[[L1]] :
 // CHECK:         %[[L2:.*]] = cc.create_lambda {
 // CHECK:         ^bb0(%[[ARG:.*]]: !quake.wire):
 // CHECK:           quake.null_wire
 // CHECK:           quake.x [%[[ARG]]]
 // CHECK:         } : !cc.callable<(!quake.wire) -> (!quake.wire, !quake.wire)>
-// CHECK:         cc.call_callable %[[L2]](%[[C1]]#0) :
+// CHECK:         cc.call_callable %[[L2]], %[[C1]]#0 :
 func.func @cross_partition_flow() {
   %w0  = quake.null_wire
   %w1  = quake.null_wire
@@ -92,26 +96,20 @@ func.func @cross_partition_flow() {
 }
 
 // ---------------------------------------------------------------------------
-// Pure ref semantics. Alloca values are !quake.ref, not !quake.wire, so
-// outlinePartition sees no wire I/O — every lambda is () → ().
-//
-// P1 (alloca×2, h×2, x) → () → ()
-// P2 (alloca, h)         → () → ()
+// Pure ref semantics. Reference values may alias, so there is no single qubit
+// timeline to place them on — partitioning declines to touch them and the
+// function comes out exactly as it went in.
 //
 // CHECK-LABEL: func.func @ref_qubits
-// CHECK:         %[[L1:.*]] = cc.create_lambda {
-// CHECK:           quake.alloca !quake.ref
-// CHECK:           quake.alloca !quake.ref
-// CHECK:           quake.h
-// CHECK:           quake.h
-// CHECK:           quake.x
-// CHECK:         } : !cc.callable<() -> ()>
-// CHECK:         cc.call_callable %[[L1]]() :
-// CHECK:         %[[L2:.*]] = cc.create_lambda {
-// CHECK:           quake.alloca !quake.ref
-// CHECK:           quake.h
-// CHECK:         } : !cc.callable<() -> ()>
-// CHECK:         cc.call_callable %[[L2]]() :
+// CHECK-NOT:     cc.create_lambda
+// CHECK:         quake.alloca !quake.ref
+// CHECK:         quake.alloca !quake.ref
+// CHECK:         quake.alloca !quake.ref
+// CHECK:         quake.h
+// CHECK:         quake.h
+// CHECK:         quake.x
+// CHECK:         quake.h
+// CHECK:         return
 func.func @ref_qubits() {
   %q0 = quake.alloca !quake.ref
   %q1 = quake.alloca !quake.ref
@@ -124,27 +122,21 @@ func.func @ref_qubits() {
 }
 
 // ---------------------------------------------------------------------------
-// Mixed ref and wire semantics. The two null_wire qubits fill P1 (wire
-// partition); the alloca qubit lands in P2 (ref partition). The two
-// partitions are independent — no wire passes between them.
-//
-// P1 (null_wire×2, h×2, cx) → () → (!quake.wire, !quake.wire)
-// P2 (alloca, h)             → () → ()
+// Mixed ref and wire semantics. One aliasable qubit is enough to make the
+// whole function unsound to partition, so the pass backs out wholesale — the
+// wire qubits are left alone too, rather than placed around a ref the placer
+// cannot see.
 //
 // CHECK-LABEL: func.func @mixed_ref_wire
-// CHECK:         %[[L1:.*]] = cc.create_lambda {
-// CHECK:           quake.null_wire
-// CHECK:           quake.null_wire
-// CHECK:           quake.h
-// CHECK:           quake.h
-// CHECK:           quake.x
-// CHECK:         } : !cc.callable<() -> (!quake.wire, !quake.wire)>
-// CHECK:         cc.call_callable %[[L1]]() :
-// CHECK:         %[[L2:.*]] = cc.create_lambda {
-// CHECK:           quake.alloca !quake.ref
-// CHECK:           quake.h
-// CHECK:         } : !cc.callable<() -> ()>
-// CHECK:         cc.call_callable %[[L2]]() :
+// CHECK-NOT:     cc.create_lambda
+// CHECK:         quake.null_wire
+// CHECK:         quake.null_wire
+// CHECK:         quake.alloca !quake.ref
+// CHECK:         quake.h
+// CHECK:         quake.h
+// CHECK:         quake.x
+// CHECK:         quake.h
+// CHECK:         return
 func.func @mixed_ref_wire() {
   %w0 = quake.null_wire
   %w1 = quake.null_wire

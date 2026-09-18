@@ -2177,23 +2177,25 @@ def quake_MoveOp : QuakeOp<"move"> {
     Relocates a qubit wire to a named QPU region, consuming the input and
     producing a new wire at the destination.
 
-    Without a slot the qubit is moved to the region without committing to a
-    specific wire position (used for inter-region transfers):
-    ```mlir
-      %q = quake.move %w to @r1 : !quake.wire
-    ```
+    The destination names which array of the region -- its compute `wires`, its
+    `in` ports or its `out` ports -- and which entry of it. Naming no array
+    means the compute wires, so `@rN[k]` and `@rN wires[k]` are the same place.
 
-    With a slot the qubit is placed onto a specific wire within the region
-    (used when moving block arguments onto region wires at subcircuit entry):
+    A region is entered and left only through its ports, so carrying a qubit
+    between regions is three moves, not one:
+
     ```mlir
-      %q = quake.move %w to @r1[0] : !quake.wire
+      %a = quake.move %w to @r0 out[0]      // vacate r0's compute wire
+      %b = quake.move %a to @r1 in[0]       // cross to r1's in-port
+      %c = quake.move %b to @r1 wires[2]    // land on a compute wire there
     ```
   }];
 
   let arguments = (ins
     Arg<WireType, "wire to move", [MemRead, MemWrite]>:$wire,
     FlatSymbolRefAttr:$dest_region,
-    OptionalAttr<I32Attr>:$dest_slot
+    OptionalAttr<I32Attr>:$dest_slot,
+    OptionalAttr<StrAttr>:$dest_kind
   );
   let results = (outs
     Arg<WireType, "relocated wire", [MemRead, MemWrite]>:$result

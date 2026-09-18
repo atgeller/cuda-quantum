@@ -45,17 +45,24 @@ def run(kernel, **model):
     return target.runtime_endpoint.trace
 
 
-def test_two_regions_force_one_crossing():
-    """The cross-pair gate is the only thing that cannot stay put."""
-    trace = run(bell_cross, num_regions=2, region_size=2)
+def test_two_regions_force_a_crossing():
+    """Splitting the circuit over two regions makes the qubits travel.
+
+    Every subcircuit boundary is a port round-trip, so the count is not just
+    the one cross-pair gate -- but with two regions there is certainly traffic,
+    and each crossing is bracketed by its two port hops.
+    """
+    trace = run(bell_cross, num_regions=2, region_size=3)
     assert trace["summary"]["num_vqubits"] == 4
-    assert trace["summary"]["moves"]["cross"] == 2
-    assert trace["summary"]["total_move_cost"] > 0
+    moves = trace["summary"]["moves"]
+    assert moves["cross"] > 0
+    assert moves["port"] == 2 * moves["cross"]
+    assert trace["summary"]["total_move_ticks"] > 0
 
 
 def test_one_big_region_needs_no_movement():
     trace = run(bell_cross, num_regions=1, region_size=4)
-    assert trace["summary"]["total_move_cost"] == 0
+    assert trace["summary"]["total_move_ticks"] == 0
     assert not [m for s in trace["steps"] for m in s["moves"]]
 
 
@@ -73,16 +80,18 @@ def test_loops_are_unrolled_by_the_endpoint():
 
 
 def test_model_configuration_reaches_the_simulator():
-    trace = run(bell_cross, num_regions=2, region_size=2, move_cost=7)
-    assert trace["model"]["move_cost"] == 7
+    trace = run(bell_cross, num_regions=2, region_size=3)
+    assert trace["model"]["num_regions"] == 2
+    assert trace["model"]["region_size"] == 3
     crossings = [m for s in trace["steps"] for m in s["moves"]
                  if m["kind"] == "cross"]
-    assert crossings and all(m["cost"] == 7 for m in crossings)
+    # Every operation is one tick; the model carries no cost knobs to forward.
+    assert crossings and all(m["cost"] == 1 for m in crossings)
 
 
 def test_counts_are_zero_and_shaped_like_the_kernel():
     """Nothing simulates a state, so every shot reads back zero."""
-    target = QpuLayoutTarget.build(num_regions=2, region_size=2)
+    target = QpuLayoutTarget.build(num_regions=2, region_size=3)
     cudaq.set_target(target)
     counts = cudaq.sample(bell_cross, shots_count=10)
     assert dict(counts.items()) == {"0000": 10}

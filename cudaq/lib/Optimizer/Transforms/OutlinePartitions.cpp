@@ -35,6 +35,23 @@ static inline bool isWire(Value v) {
   return isa<cudaq::quake::WireType>(v.getType());
 }
 
+/// Whether any value in `func` has reference semantics. Reference qubits may
+/// alias, so there is no answer to "which qubit timeline is this" -- the very
+/// question a placement decision rests on. One of them anywhere is enough to
+/// make the partitioning of the whole function unsound, so the pass backs out
+/// wholesale rather than partitioning the wire-only remainder around it.
+static bool hasRefSemantics(Operation *func) {
+  return func
+      ->walk([](Operation *op) {
+        for (Value v :
+             llvm::concat<Value>(op->getOperands(), op->getResults()))
+          if (isa<cudaq::quake::RefType>(v.getType()))
+            return WalkResult::interrupt();
+        return WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
 #ifndef NDEBUG
 static bool validatePartition(const DenseSet<Operation *> &partition,
                               const SmallVector<Operation *> &orderedOps,
@@ -185,6 +202,10 @@ public:
 
   void runOnOperation() override {
     Operation *op = getOperation();
+    // Composable: a function the pass cannot reason about is left alone, not
+    // diagnosed. Callers run this over whatever a pipeline hands them.
+    if (hasRefSemantics(op))
+      return;
     if (strategy == "greedy") {
       cudaq::opt::GreedyOpPartitioner analysis(op, maxQubits);
       if (failed(cudaq::opt::outlinePartitions(analysis.getPartitions())))

@@ -1303,6 +1303,13 @@ ParseResult cudaq::quake::MoveOp::parse(OpAsmParser &parser,
   if (parser.parseAttribute(destRegion, getDestRegionAttrName(result.name),
                             result.attributes))
     return failure();
+  // Which array of the region; naming none means its compute wires.
+  for (StringRef kind : {"wires", "in", "out"})
+    if (succeeded(parser.parseOptionalKeyword(kind))) {
+      result.addAttribute(getDestKindAttrName(result.name),
+                          parser.getBuilder().getStringAttr(kind));
+      break;
+    }
   if (succeeded(parser.parseOptionalLSquare())) {
     std::int32_t slot = 0;
     if (parser.parseInteger(slot) || parser.parseRSquare())
@@ -1313,6 +1320,8 @@ ParseResult cudaq::quake::MoveOp::parse(OpAsmParser &parser,
   Type wireType;
   if (parser.parseColon() || parser.parseType(wireType))
     return failure();
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
   if (parser.resolveOperand(wireArg, wireType, result.operands))
     return failure();
   result.addTypes(wireType);
@@ -1321,11 +1330,14 @@ ParseResult cudaq::quake::MoveOp::parse(OpAsmParser &parser,
 
 void cudaq::quake::MoveOp::print(OpAsmPrinter &p) {
   p << ' ' << getWire() << " to @" << getDestRegion();
+  if (auto kindAttr = getDestKindAttr())
+    p << ' ' << kindAttr.getValue();
   if (auto slotAttr = getDestSlotAttr())
     p << '[' << slotAttr.getInt() << ']';
   p << " : " << getResult().getType();
   p.printOptionalAttrDictWithKeyword(
-      (*this)->getAttrs(), {getDestRegionAttrName(), getDestSlotAttrName()});
+      (*this)->getAttrs(), {getDestRegionAttrName(), getDestSlotAttrName(),
+                            getDestKindAttrName()});
 }
 
 //===----------------------------------------------------------------------===//

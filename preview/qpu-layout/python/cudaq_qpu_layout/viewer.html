@@ -117,7 +117,27 @@
   .kpi .k { color: var(--text-secondary); font-size: 12px; }
 
   /* --- The QPU layout --- */
-  .stage { position: relative; margin-bottom: 8px; }
+  /* The QPU scales inside its viewport; everything around it -- controls,
+     KPIs, the events panel -- keeps its size, so zooming out to take in a wide
+     QPU never shrinks the things you click. */
+  .viewport {
+    position: relative; overflow: auto; margin-bottom: 8px;
+    max-height: 68vh; padding: 4px;
+    background: var(--surface-0); border: 1px solid var(--hairline);
+    border-radius: 11px;
+  }
+  .stage {
+    position: relative;
+    transform: scale(var(--zoom, 1)); transform-origin: top left;
+    width: max-content;
+  }
+  .zoombar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .zoombar input[type=range] { flex: 0 1 180px; min-width: 100px; }
+  .zoombar button { min-width: 34px; }
+  .zoomval {
+    color: var(--text-secondary); font-variant-numeric: tabular-nums;
+    min-width: 44px;
+  }
   /* Gate view: qubits are rows, op-bearing timesteps are columns. */
   .gatestage {
     position: relative; margin-bottom: 8px; overflow: auto;
@@ -125,10 +145,15 @@
     border: 1px solid var(--hairline); border-radius: 11px; padding: 4px;
   }
   .gatestage .col:hover { cursor: pointer; }
-  .regions { display: flex; flex-wrap: wrap; gap: 16px; }
+  /* A grid rather than a wrapping row: regions keep the same arrangement at
+     every zoom, so the QPU reads as one shape instead of reflowing. */
+  .regions {
+    display: grid; gap: 16px; align-items: start;
+    grid-template-columns: repeat(var(--region-cols, 3), max-content);
+  }
   .region {
     background: var(--surface-1); border: 1px solid var(--hairline);
-    border-radius: 11px; padding: 13px 15px 15px; flex: 1 1 260px;
+    border-radius: 11px; padding: 13px 15px 15px;
   }
   .region h2 {
     font-size: 12px; font-weight: 600; letter-spacing: .04em;
@@ -147,36 +172,35 @@
   .ports { display: flex; gap: 10px; }
   .ports .subbox { flex: 1; margin-top: 10px; }
   .subbox.port { border-style: dashed; }
-  /* 2px surface gap between cells rather than borders to separate them. */
-  .lane { display: flex; flex-wrap: wrap; gap: 6px; }
+  /* A fixed grid, not a wrapping flex row: the lane reserves room for its
+     full capacity so a card keeps one size as qubits come and go. */
+  .regions { --cell-w: 52px; }
+  .lane {
+    display: grid; gap: 6px; align-content: start;
+    grid-template-columns: repeat(var(--cols, 4), var(--cell-w));
+  }
   .cell {
     width: 52px; height: 42px; border-radius: 8px;
     background: var(--surface-2); border: 1px solid var(--hairline);
     display: flex; align-items: center; justify-content: center;
     font-variant-numeric: tabular-nums; position: relative;
   }
-  .cell .slot {
-    position: absolute; top: 2px; left: 5px;
-    font-size: 9px; color: var(--text-muted);
-  }
   .cell .q { font-weight: 600; font-size: 14px; color: var(--text-primary); }
   /* Gate-label mode needs room for `CX(q51,q58)`. */
+  .regions.labels { --cell-w: 104px; }
   .regions.labels .cell { width: 104px; }
   .regions.labels .cell .q { font-size: 11px; letter-spacing: -.01em; }
-  .cell.empty .q { color: var(--text-muted); font-weight: 400; }
-  /* Ports are the same size as compute wires: a qubit sitting on one is the
-     same object, just parked somewhere that cannot run a gate. */
-  .cell.port .slot { color: var(--series-2); }
+  /* A region holding nobody: the box still has to say so. */
+  .lane-empty {
+    grid-column: 1 / -1;
+    color: var(--text-muted); font-size: 13px; line-height: 42px;
+  }
   /* State ring: what is happening to this qubit right now. */
   .cell.occupied { background: var(--surface-1); }
   .cell.gate     { background: var(--series-1-wash); border-color: var(--series-1); box-shadow: 0 0 0 1px var(--series-1); }
   .cell.transfer { background: var(--series-2-wash); border-color: var(--series-2); box-shadow: 0 0 0 1px var(--series-2); }
   .cell.hop      { background: var(--series-3-wash); border-color: var(--series-3); box-shadow: 0 0 0 1px var(--series-3); }
   .cell.trail    { outline: 2px dotted var(--text-muted); outline-offset: 2px; }
-  /* A qubit whose wire was returned: still shown where it last sat, but the
-     slot is free, so it must not read as occupancy. */
-  .cell.ghost { background: transparent; border-style: dashed; }
-  .cell.ghost .q { color: var(--text-muted); font-weight: 400; }
   .cell:hover, .cell:focus-visible { filter: brightness(1.04); }
   .cell[tabindex]:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
 
@@ -268,9 +292,20 @@
 
   <div class="kpis" id="kpis"></div>
 
+  <div class="zoombar">
+    <button id="zoomout" title="Zoom out (-)">&minus;</button>
+    <input type="range" id="zoom" min="25" max="150" value="100"
+           aria-label="Zoom">
+    <button id="zoomin" title="Zoom in (+)">+</button>
+    <button id="zoomfit" title="Fit every region in view (0)">Fit</button>
+    <span class="zoomval" id="zoomval">100%</span>
+  </div>
+
+  <div class="viewport" id="viewport">
   <div class="stage" id="qpustage">
     <div class="regions" id="regions"></div>
     <svg id="links"></svg>
+  </div>
   </div>
 
   <div class="gatestage" id="gatestage" hidden>
@@ -285,7 +320,6 @@
     <span><i class="swatch" style="background:var(--series-2-wash);border-color:var(--series-2)"></i> inter-region crossing</span>
     <span><i class="swatch" style="background:var(--series-3-wash);border-color:var(--series-3)"></i> compute &harr; port hop</span>
     <span><i class="swatch" style="background:var(--surface-2)"></i> free wire</span>
-    <span><i class="swatch" style="background:transparent;border-style:dashed"></i> wire returned &mdash; slot free</span>
   </div>
 
   <div class="panel">
@@ -305,7 +339,7 @@
 </div>
 <div id="tip" role="tooltip"></div>
 
-<script id="trace-data" type="application/json">{"schema":"cudaq-qpu-layout-trace/3","entry":"bell_cross","model":{"num_regions":2,"region_size":2,"gate_cost":1,"move_cost":4,"port_cost":1},"steps":[{"t":0,"ops":[{"gate":"h","region":0,"controls":[],"targets":[{"vq":0,"region":0,"slot":0}],"params":[]},{"gate":"h","region":1,"controls":[],"targets":[{"vq":2,"region":1,"slot":0}],"params":[]}],"moves":[],"deltas":[{"event":"assign","vq":0,"to":{"region":0,"kind":"compute","slot":0}},{"event":"assign","vq":2,"to":{"region":1,"kind":"compute","slot":0}}]},{"t":1,"ops":[{"gate":"x","region":0,"controls":[{"vq":0,"region":0,"slot":0}],"targets":[{"vq":1,"region":0,"slot":1}],"params":[]},{"gate":"x","region":1,"controls":[{"vq":2,"region":1,"slot":0}],"targets":[{"vq":3,"region":1,"slot":1}],"params":[]}],"moves":[],"deltas":[{"event":"assign","vq":1,"to":{"region":0,"kind":"compute","slot":1}},{"event":"assign","vq":3,"to":{"region":1,"kind":"compute","slot":1}}]},{"t":2,"ops":[],"moves":[{"vq":0,"kind":"port-out","from":{"region":0,"kind":"compute","slot":0},"to":{"region":0,"kind":"out","slot":0},"cost":1},{"vq":2,"kind":"port-out","from":{"region":1,"kind":"compute","slot":0},"to":{"region":1,"kind":"out","slot":0},"cost":1}],"deltas":[{"event":"move","vq":0,"from":{"region":0,"kind":"compute","slot":0},"to":{"region":0,"kind":"out","slot":0}},{"event":"move","vq":2,"from":{"region":1,"kind":"compute","slot":0},"to":{"region":1,"kind":"out","slot":0}},{"event":"release","vq":3,"from":{"region":1,"kind":"compute","slot":1}}]},{"t":3,"ops":[],"moves":[{"vq":2,"kind":"cross","from":{"region":1,"kind":"out","slot":0},"to":{"region":0,"kind":"in","slot":0},"cost":4},{"vq":0,"kind":"cross","from":{"region":0,"kind":"out","slot":0},"to":{"region":1,"kind":"in","slot":0},"cost":4}],"deltas":[{"event":"move","vq":2,"from":{"region":1,"kind":"out","slot":0},"to":{"region":0,"kind":"in","slot":0}},{"event":"move","vq":0,"from":{"region":0,"kind":"out","slot":0},"to":{"region":1,"kind":"in","slot":0}}]},{"t":7,"ops":[],"moves":[{"vq":2,"kind":"port-in","from":{"region":0,"kind":"in","slot":0},"to":{"region":0,"kind":"compute","slot":0},"cost":1},{"vq":0,"kind":"port-in","from":{"region":1,"kind":"in","slot":0},"to":{"region":1,"kind":"compute","slot":0},"cost":1}],"deltas":[{"event":"move","vq":2,"from":{"region":0,"kind":"in","slot":0},"to":{"region":0,"kind":"compute","slot":0}},{"event":"move","vq":0,"from":{"region":1,"kind":"in","slot":0},"to":{"region":1,"kind":"compute","slot":0}}]},{"t":8,"ops":[{"gate":"x","region":0,"controls":[{"vq":1,"region":0,"slot":1}],"targets":[{"vq":2,"region":0,"slot":0}],"params":[]}],"moves":[],"deltas":[{"event":"release","vq":0,"from":{"region":1,"kind":"compute","slot":0}}]},{"t":9,"ops":[],"moves":[],"deltas":[{"event":"release","vq":1,"from":{"region":0,"kind":"compute","slot":1}},{"event":"release","vq":2,"from":{"region":0,"kind":"compute","slot":0}}]}],"summary":{"depth":9,"num_vqubits":4,"num_measurements":0,"moves":{"cross":2,"port":4},"total_move_cost":12,"region_utilization":[{"region":0,"peak":2,"busy_steps":3},{"region":1,"peak":2,"busy_steps":2}],"unmodeled_ops":[]}}</script>
+<script id="trace-data" type="application/json">{"schema":"cudaq-qpu-layout-trace/4","entry":"bell_cross","model":{"num_regions":2,"region_size":2},"steps":[{"t":0,"ops":[{"gate":"h","region":0,"controls":[],"targets":[{"vq":0,"region":0}],"params":[]},{"gate":"h","region":1,"controls":[],"targets":[{"vq":2,"region":1}],"params":[]}],"moves":[],"deltas":[{"event":"assign","vq":0,"to":{"region":0,"kind":"compute"}},{"event":"assign","vq":1,"to":{"region":0,"kind":"compute"}},{"event":"assign","vq":2,"to":{"region":1,"kind":"compute"}},{"event":"assign","vq":3,"to":{"region":1,"kind":"compute"}}]},{"t":1,"ops":[{"gate":"x","region":0,"controls":[{"vq":0,"region":0}],"targets":[{"vq":1,"region":0}],"params":[]},{"gate":"x","region":1,"controls":[{"vq":2,"region":1}],"targets":[{"vq":3,"region":1}],"params":[]}],"moves":[],"deltas":[]},{"t":2,"ops":[],"moves":[{"vq":0,"kind":"port-out","from":{"region":0,"kind":"compute"},"to":{"region":0,"kind":"out"},"cost":1},{"vq":1,"kind":"port-out","from":{"region":0,"kind":"compute"},"to":{"region":0,"kind":"out"},"cost":1},{"vq":2,"kind":"port-out","from":{"region":1,"kind":"compute"},"to":{"region":1,"kind":"out"},"cost":1},{"vq":3,"kind":"port-out","from":{"region":1,"kind":"compute"},"to":{"region":1,"kind":"out"},"cost":1}],"deltas":[{"event":"move","vq":0,"from":{"region":0,"kind":"compute"},"to":{"region":0,"kind":"out"}},{"event":"move","vq":1,"from":{"region":0,"kind":"compute"},"to":{"region":0,"kind":"out"}},{"event":"move","vq":2,"from":{"region":1,"kind":"compute"},"to":{"region":1,"kind":"out"}},{"event":"move","vq":3,"from":{"region":1,"kind":"compute"},"to":{"region":1,"kind":"out"}}]},{"t":3,"ops":[],"moves":[{"vq":1,"kind":"cross","from":{"region":0,"kind":"out"},"to":{"region":0,"kind":"in"},"cost":1},{"vq":2,"kind":"cross","from":{"region":1,"kind":"out"},"to":{"region":0,"kind":"in"},"cost":1},{"vq":0,"kind":"cross","from":{"region":0,"kind":"out"},"to":{"region":1,"kind":"in"},"cost":1},{"vq":3,"kind":"cross","from":{"region":1,"kind":"out"},"to":{"region":1,"kind":"in"},"cost":1}],"deltas":[{"event":"move","vq":1,"from":{"region":0,"kind":"out"},"to":{"region":0,"kind":"in"}},{"event":"move","vq":2,"from":{"region":1,"kind":"out"},"to":{"region":0,"kind":"in"}},{"event":"move","vq":0,"from":{"region":0,"kind":"out"},"to":{"region":1,"kind":"in"}},{"event":"move","vq":3,"from":{"region":1,"kind":"out"},"to":{"region":1,"kind":"in"}}]},{"t":4,"ops":[],"moves":[{"vq":1,"kind":"port-in","from":{"region":0,"kind":"in"},"to":{"region":0,"kind":"compute"},"cost":1},{"vq":2,"kind":"port-in","from":{"region":0,"kind":"in"},"to":{"region":0,"kind":"compute"},"cost":1},{"vq":0,"kind":"port-in","from":{"region":1,"kind":"in"},"to":{"region":1,"kind":"compute"},"cost":1},{"vq":3,"kind":"port-in","from":{"region":1,"kind":"in"},"to":{"region":1,"kind":"compute"},"cost":1}],"deltas":[{"event":"move","vq":1,"from":{"region":0,"kind":"in"},"to":{"region":0,"kind":"compute"}},{"event":"move","vq":2,"from":{"region":0,"kind":"in"},"to":{"region":0,"kind":"compute"}},{"event":"move","vq":0,"from":{"region":1,"kind":"in"},"to":{"region":1,"kind":"compute"}},{"event":"move","vq":3,"from":{"region":1,"kind":"in"},"to":{"region":1,"kind":"compute"}}]},{"t":5,"ops":[{"gate":"x","region":0,"controls":[{"vq":1,"region":0}],"targets":[{"vq":2,"region":0}],"params":[]}],"moves":[],"deltas":[{"event":"release","vq":0,"from":{"region":1,"kind":"compute"}},{"event":"release","vq":3,"from":{"region":1,"kind":"compute"}}]},{"t":6,"ops":[],"moves":[],"deltas":[{"event":"release","vq":1,"from":{"region":0,"kind":"compute"}},{"event":"release","vq":2,"from":{"region":0,"kind":"compute"}}]}],"summary":{"depth":6,"num_vqubits":4,"num_measurements":0,"moves":{"cross":4,"port":8},"total_move_ticks":12,"region_utilization":[{"region":0,"peak":2,"busy_steps":3},{"region":1,"peak":2,"busy_steps":2}],"unmodeled_ops":[]}}</script>
 
 <script>
 (function () {
@@ -314,7 +348,7 @@
   var COMPUTE = "compute", IN = "in", OUT = "out";
   var CROSS = "cross";
 
-  var trace = null, states = [], qubits = [], portCount = [], idx = 0,
+  var trace = null, states = [], qubits = [], idx = 0,
       timer = null;
   var tableRows = [], hereRow = null;
   var mode = "qpu", opSteps = [], gatesFrom = -1, hereCol = null;
@@ -326,13 +360,16 @@
   /* A long trace has far more columns than fit on screen, so the gate view
      draws a window of op-bearing steps around the current one. */
   var GATE_WINDOW = 28, COLW = 30, ROWH = 15, GUTTER = 42;
+  /* Lane grid geometry -- must match .cell/.lane in the stylesheet. */
+  var LANE_COLS = 4, CELL_H = 42, LANE_GAP = 6;
+  var laneCap = {};
+  var ZOOM_MIN = 0.25, ZOOM_MAX = 1.5;
+  var zoom = 1;
   var hoverQubit = null;
 
   var $ = function (id) { return document.getElementById(id); };
 
   function text(el, s) { el.textContent = s == null ? "" : String(s); }
-
-  function siteKey(s) { return s.region + "/" + s.kind + "/" + s.slot; }
 
   /* Two classes of movement, two hues. A `cross` leaves the region and is the
      expensive one; `port-out`/`port-in` only step between a compute wire and a
@@ -345,27 +382,21 @@
   }
 
   /* Reconstruct occupancy by replaying the delta stream, exactly as
-     trace.replay() does on the Python side. `live` is that occupancy; the
-     model places a qubit lazily on first use and frees its wire at its last
-     use, so `retired` (returned, slot now free) and the qubits not yet placed
-     are tracked alongside it -- every qubit stays on screen for the whole
-     trace rather than blinking in and out. */
+     trace.replay() does on the Python side. The model places a qubit lazily on
+     first use and frees its wire at its last use; a freed qubit is reset and
+     gone, so it simply stops being shown -- the `reset & release` event row is
+     what records that it happened. */
   function buildStates(tr) {
-    var pos = {}, last = {}, out = [];
+    var pos = {}, done = {}, out = [];
     tr.steps.forEach(function (step) {
       (step.deltas || []).forEach(function (d) {
-        if (d.event === "release") {
-          last[d.vq] = pos[d.vq] || d.from;
-          delete pos[d.vq];
-        } else {
-          pos[d.vq] = d.to;
-          delete last[d.vq];
-        }
+        if (d.event === "release") { delete pos[d.vq]; done[d.vq] = true; }
+        else { pos[d.vq] = d.to; delete done[d.vq]; }
       });
-      var live = {}, retired = {};
+      var live = {}, gone = {};
       Object.keys(pos).forEach(function (k) { live[k] = pos[k]; });
-      Object.keys(last).forEach(function (k) { retired[k] = last[k]; });
-      out.push({ live: live, retired: retired });
+      Object.keys(done).forEach(function (k) { gone[k] = true; });
+      out.push({ live: live, done: gone });
     });
     return out;
   }
@@ -385,23 +416,6 @@
       });
     });
     return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
-  }
-
-  /* Ports are unbounded, so the diagram shows as many lanes as the trace
-     actually used -- at least one, so the lane is never a bare label. */
-  function countPorts(tr) {
-    var n = [];
-    for (var r = 0; r < tr.model.num_regions; r++) n.push({ "in": 1, "out": 1 });
-    tr.steps.forEach(function (step) {
-      (step.deltas || []).forEach(function (d) {
-        [d.from, d.to].forEach(function (s) {
-          if (s && s.kind !== COMPUTE && n[s.region]) {
-            n[s.region][s.kind] = Math.max(n[s.region][s.kind], s.slot + 1);
-          }
-        });
-      });
-    });
-    return n;
   }
 
   /* What is happening to each qubit at this step: gate | transfer. */
@@ -444,8 +458,10 @@
     return o.gate + (qs.length ? " [" + qs.join(", ") + "]" : "") + " " + ts.join(", ");
   }
 
+  /* No wire index: which region, and compute or which port, is all the model
+     commits to until intra-region mapping lands. */
   function siteLabel(s) {
-    return "r" + s.region + "." + (s.kind === COMPUTE ? "c" : s.kind) + "[" + s.slot + "]";
+    return "r" + s.region + "." + (s.kind === COMPUTE ? "compute" : s.kind);
   }
 
   // ---- rendering ---------------------------------------------------------
@@ -460,7 +476,7 @@
       ["WIP: depth", s.depth + " cycles"],
       ["WIP: crossings", s.moves.cross],
       ["WIP: port hops", s.moves.port],
-      ["WIP: move cost", s.total_move_cost]
+      ["WIP: move ticks", s.total_move_ticks]
     ];
     var host = $("kpis");
     host.innerHTML = "";
@@ -472,36 +488,20 @@
     });
   }
 
-  function makeCell(region, kind, slot, occupantVq, act, ghostVq) {
+  function makeCell(region, kind, occupantVq, act) {
     var c = document.createElement("div");
-    c.className = "cell" + (kind === COMPUTE ? "" : " port");
-    c.dataset.site = region + "/" + kind + "/" + slot;
-    if (occupantVq == null && ghostVq != null) {
-      occupantVq = ghostVq;
-      c.classList.add("ghost");
-    }
-
-    var tag = document.createElement("span");
-    tag.className = "slot";
-    text(tag, kind === COMPUTE ? "c" + slot : kind + slot);
-    c.appendChild(tag);
+    c.className = "cell occupied" + (kind === COMPUTE ? "" : " port");
+    /* Keyed by occupant, not by wire index -- there is no wire to name. */
+    c.dataset.site = region + "/" + kind + "/q" + occupantVq;
+    c.dataset.vq = occupantVq;
+    c.tabIndex = 0;
+    if (act[occupantVq]) c.classList.add(act[occupantVq]);
+    if (String(occupantVq) === String(hoverQubit)) c.classList.add("trail");
 
     var q = document.createElement("span");
     q.className = "q";
-    if (occupantVq == null) {
-      c.classList.add("empty");
-      text(q, "·");
-    } else {
-      if (!c.classList.contains("ghost")) c.classList.add("occupied");
-      text(q, mode === "qpu-labels" && gateText[occupantVq] != null
-              ? gateText[occupantVq] : "q" + occupantVq);
-      c.dataset.vq = occupantVq;
-      c.tabIndex = 0;
-      if (act[occupantVq] && !c.classList.contains("ghost")) {
-        c.classList.add(act[occupantVq]);
-      }
-      if (String(occupantVq) === String(hoverQubit)) c.classList.add("trail");
-    }
+    text(q, mode === "qpu-labels" && gateText[occupantVq] != null
+            ? gateText[occupantVq] : "q" + occupantVq);
     c.appendChild(q);
     return c;
   }
@@ -509,20 +509,26 @@
   function renderRegions() {
     var step = trace.steps[idx], st = states[idx], act = activity(step);
     gateText = mode === "qpu-labels" ? gateLabels(step) : {};
-    var byIdSite = {}, ghostBySite = {}, placed = {};
+    /* region -> kind -> vqs. Nothing here is indexed by a wire: compute wires
+       and ports are both taken as unbounded for now, so a site is just "which
+       region, and compute or which port". */
+    var liveIn = {};
     Object.keys(st.live).forEach(function (vq) {
-      byIdSite[siteKey(st.live[vq])] = vq;
+      var s = st.live[vq];
+      var byKind = liveIn[s.region] = liveIn[s.region] || {};
+      (byKind[s.kind] = byKind[s.kind] || []).push(+vq);
     });
-    /* A returned qubit keeps its last cell only while that cell is free -- if
-       something took the slot, the live occupant wins and the qubit falls
-       through to the tray, so it is still shown exactly once. */
-    Object.keys(st.retired).forEach(function (vq) {
-      var k = siteKey(st.retired[vq]);
-      if (byIdSite[k] == null && ghostBySite[k] == null) ghostBySite[k] = vq;
-    });
+
+    function at(r, kind) {
+      return ((liveIn[r] || {})[kind] || []).sort(numeric);
+    }
 
     var host = $("regions");
     host.className = "regions" + (mode === "qpu-labels" ? " labels" : "");
+    /* A squarish grid: a row of 16 regions is unreadable at any zoom. */
+    host.style.setProperty(
+      "--region-cols",
+      Math.max(1, Math.ceil(Math.sqrt(trace.model.num_regions))));
     host.innerHTML = "";
     for (var r = 0; r < trace.model.num_regions; r++) {
       var card = document.createElement("div");
@@ -531,43 +537,31 @@
       var h = document.createElement("h2");
       var nm = document.createElement("span"); text(nm, "Region " + r);
       var occ = document.createElement("span"); occ.className = "occ";
-      var used = 0;
-      for (var s = 0; s < trace.model.region_size; s++) {
-        if (byIdSite[r + "/" + COMPUTE + "/" + s] != null) used++;
-      }
-      text(occ, used + " / " + trace.model.region_size + " wires");
+      var residents = at(r, COMPUTE);
+      text(occ, residents.length + (residents.length === 1 ? " qubit" : " qubits"));
       h.appendChild(nm); h.appendChild(occ); card.appendChild(h);
 
-      card.appendChild(lane("compute wires", r, COMPUTE,
-                            trace.model.region_size, byIdSite, act,
-                            ghostBySite, placed));
+      card.appendChild(qubitLane("qubits in region", r, COMPUTE, residents, act));
       /* Ports are not compute: a qubit on one is in transit, not resident, so
-         they get their own boxes rather than reading as extra capacity. */
+         they keep their own boxes. */
       var ports = document.createElement("div");
       ports.className = "ports";
-      ports.appendChild(lane("in-ports", r, IN, portCount[r]["in"], byIdSite,
-                             act, ghostBySite, placed));
-      ports.appendChild(lane("out-ports", r, OUT, portCount[r]["out"], byIdSite,
-                             act, ghostBySite, placed));
+      ports.appendChild(qubitLane("in-ports", r, IN, at(r, IN), act));
+      ports.appendChild(qubitLane("out-ports", r, OUT, at(r, OUT), act));
       card.appendChild(ports);
       host.appendChild(card);
     }
-    renderTray(st, placed);
+    renderTray(st);
   }
 
-  /* Whatever the region grid could not show: qubits the model has not placed
-     yet, and returned qubits whose old slot has been taken. */
-  function renderTray(st, placed) {
+  /* Qubits the model has not placed yet. A released qubit is not here: it has
+     been reset and is gone, which the event row records. */
+  function renderTray(st) {
     var host = $("offwire");
     host.innerHTML = "";
     var items = [];
     qubits.forEach(function (vq) {
-      if (st.live[vq] != null) return;
-      if (st.retired[vq] != null) {
-        if (!placed[vq]) items.push([vq, "wire returned"]);
-      } else {
-        items.push([vq, "not yet placed"]);
-      }
+      if (st.live[vq] == null && !st.done[vq]) items.push([vq, "not yet placed"]);
     });
     if (!items.length) { host.hidden = true; return; }
     host.hidden = false;
@@ -584,19 +578,60 @@
     });
   }
 
-  function lane(label, region, kind, n, byIdSite, act, ghostBySite, placed) {
+  function numeric(a, b) { return a - b; }
+
+  /* Region cards must not resize as qubits come and go -- that reads as the QPU
+     changing shape when only its occupancy did. Every lane reserves room for
+     the most it can ever hold: a compute lane by the region's capacity, and the
+     unbounded ports by the most the trace ever parks on one at once. */
+  function laneCapacities(tr, sts) {
+    var cap = {};
+    cap[COMPUTE] = Math.max(1, tr.model.region_size);
+    cap[IN] = 1;
+    cap[OUT] = 1;
+    sts.forEach(function (st) {
+      var n = {};
+      Object.keys(st.live).forEach(function (vq) {
+        var site = st.live[vq];
+        var key = site.region + "/" + site.kind;
+        n[key] = (n[key] || 0) + 1;
+        if (n[key] > cap[site.kind]) cap[site.kind] = n[key];
+      });
+    });
+    // The observed maximum, not just the declared capacity: a trace that
+    // overfills a region would otherwise resize the card it overflows, quietly
+    // hiding the very thing worth seeing.
+    return cap;
+  }
+
+  /* Compute wires and ports are both taken as unbounded for now, and the region
+     interior is all-to-all, so a lane lists who is on it rather than drawing a
+     cell per wire: a wire index would imply a structure the model does not
+     have. Intra-region mapping comes first, ports and moves after it. */
+  function qubitLane(label, region, kind, residents, act) {
     var frag = document.createDocumentFragment();
     var l = document.createElement("div"); l.className = "lane-label";
     text(l, label); frag.appendChild(l);
+
     var row = document.createElement("div"); row.className = "lane";
-    for (var s = 0; s < n; s++) {
-      var key = region + "/" + kind + "/" + s, ghost = ghostBySite[key];
-      if (byIdSite[key] == null && ghost != null) placed[ghost] = true;
-      row.appendChild(makeCell(region, kind, s, byIdSite[key], act, ghost));
+    var capacity = Math.max(laneCap[kind] || 1, residents.length);
+    var cols = Math.min(capacity, LANE_COLS);
+    var rows = Math.ceil(capacity / cols);
+    row.style.setProperty("--cols", cols);
+    row.style.minHeight = (rows * CELL_H + (rows - 1) * LANE_GAP) + "px";
+    residents.forEach(function (vq) {
+      row.appendChild(makeCell(region, kind, vq, act));
+    });
+    if (!row.childNodes.length) {
+      var e = document.createElement("span");
+      e.className = "lane-empty"; text(e, "empty");
+      row.appendChild(e);
     }
     frag.appendChild(row);
+
     var box = document.createElement("div");
     box.className = "subbox" + (kind === COMPUTE ? " compute" : " port");
+    box.dataset.lane = region + "/" + kind;
     box.appendChild(frag);
     return box;
   }
@@ -736,18 +771,30 @@
   function renderLinks() {
     var svg = $("links");
     while (svg.firstChild) svg.removeChild(svg.firstChild);
-    var stage = svg.parentNode.getBoundingClientRect();
-    svg.setAttribute("viewBox", "0 0 " + stage.width + " " + stage.height);
-    svg.setAttribute("width", stage.width);
-    svg.setAttribute("height", stage.height);
+    /* The stage is scaled by a CSS transform, so every measured rectangle comes
+       back in scaled pixels. Divide them back out and draw in the stage's own
+       coordinates -- the transform then scales the arrows with everything
+       else, instead of scaling them twice. */
+    var node = svg.parentNode;
+    var stage = node.getBoundingClientRect();
+    var w = node.offsetWidth, h = node.offsetHeight;
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
 
-    function boxOf(site) {
-      var el = document.querySelector('.cell[data-site="' + siteKey(site) + '"]');
+    /* A cell is keyed by its occupant, and at one end of a move the qubit has
+       already left -- fall back to the lane itself, so the arrow still reads as
+       leaving/entering that lane. */
+    function boxOf(site, vq) {
+      var el = document.querySelector('.cell[data-site="' + site.region + "/" +
+                                      site.kind + "/q" + vq + '"]') ||
+               document.querySelector('.subbox[data-lane="' + site.region +
+                                      "/" + site.kind + '"]');
       if (!el) return null;
       var b = el.getBoundingClientRect();
-      return { x: b.left - stage.left + b.width / 2,
-               y: b.top - stage.top + b.height / 2,
-               w: b.width, h: b.height };
+      return { x: (b.left - stage.left) / zoom + b.width / zoom / 2,
+               y: (b.top - stage.top) / zoom + b.height / zoom / 2,
+               w: b.width / zoom, h: b.height / zoom };
     }
 
     /* Stop the line at the cell's edge, not its center, so the stroke and
@@ -763,7 +810,7 @@
     }
 
     (trace.steps[idx].moves || []).forEach(function (m) {
-      var ba = boxOf(m.from), bb = boxOf(m.to);
+      var ba = boxOf(m.from, m.vq), bb = boxOf(m.to, m.vq);
       if (!ba || !bb) return;
       var a = edge(ba, bb), b = edge(bb, ba);
       var color = moveHue(m.kind);
@@ -826,8 +873,9 @@
       return d.event === "release";
     });
     releases.forEach(function (d) {
-      host.appendChild(evRow("var(--text-muted)", "release q" + d.vq,
-                             "frees " + siteLabel(d.from)));
+      host.appendChild(evRow("var(--text-muted)", "reset & release q" + d.vq,
+                             "reset, and its wire on " + siteLabel(d.from) +
+                             " returned to the pool"));
     });
 
     if (!host.childNodes.length) {
@@ -929,20 +977,17 @@
     var cell = e.target.closest ? e.target.closest(".cell") : null;
     if (!cell) return hideTip();
     var parts = cell.dataset.site.split("/");
-    var site = { region: +parts[0], kind: parts[1], slot: +parts[2] };
+    var site = { region: +parts[0], kind: parts[1] };
     var vq = cell.dataset.vq;
     tip.innerHTML = "";
     var head = document.createElement("div"); head.className = "val";
     text(head, vq == null ? "free wire" : "q" + vq);
     var sub = document.createElement("div"); sub.className = "lbl";
-    text(sub, siteLabel(site) + (site.kind === COMPUTE ? " compute wire" :
-              " " + site.kind + "-port"));
+    text(sub, site.kind === COMPUTE
+         ? "region " + site.region + " · on a compute wire"
+         : siteLabel(site) + " " + site.kind + "-port");
     tip.appendChild(head); tip.appendChild(sub);
-    if (vq != null && cell.classList.contains("ghost")) {
-      var g = document.createElement("div"); g.className = "lbl";
-      text(g, "wire returned to the pool — this slot is free");
-      tip.appendChild(g);
-    } else if (vq != null) {
+    if (vq != null) {
       var act = activity(trace.steps[idx])[vq];
       if (act) {
         var a = document.createElement("div"); a.className = "lbl";
@@ -974,7 +1019,7 @@
     trace = tr;
     states = buildStates(tr);
     qubits = allQubits(tr);
-    portCount = countPorts(tr);
+    laneCap = laneCapacities(tr, states);
     idx = 0;
     $("scrub").max = tr.steps.length - 1;
     var sub = $("subtitle");
@@ -985,6 +1030,8 @@
     sub.appendChild(document.createTextNode(
       " · " + tr.schema + " · " + tr.summary.num_measurements +
       " measurements"));
+    // A new trace is a new QPU shape, so start it in view.
+    setTimeout(zoomToFit, 0);
     opSteps = [];
     tr.steps.forEach(function (step, i) {
       if ((step.ops || []).length) opSteps.push(i);
@@ -1014,6 +1061,31 @@
 
   // ---- wiring ------------------------------------------------------------
 
+  function setZoom(z, redrawLinks) {
+    zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    $("qpustage").style.setProperty("--zoom", zoom);
+    $("zoom").value = Math.round(zoom * 100);
+    text($("zoomval"), Math.round(zoom * 100) + "%");
+    // Arrow geometry is measured, so it has to be remeasured after a scale.
+    if (redrawLinks !== false && trace && mode !== "gates") renderLinks();
+  }
+
+  /* Fit the whole QPU in view: the stage's unscaled width against the space
+     available, never enlarging past 1:1. */
+  function zoomToFit() {
+    var stage = $("qpustage"), port = $("viewport");
+    if (!stage.offsetWidth) return;
+    var room = port.clientWidth - 12;
+    setZoom(Math.min(1, room / stage.offsetWidth));
+  }
+
+  $("zoom").addEventListener("input", function (e) {
+    setZoom(+e.target.value / 100);
+  });
+  $("zoomin").addEventListener("click", function () { setZoom(zoom + 0.1); });
+  $("zoomout").addEventListener("click", function () { setZoom(zoom - 0.1); });
+  $("zoomfit").addEventListener("click", zoomToFit);
+
   $("mode").addEventListener("click", cycleMode);
   $("prev").addEventListener("click", function () { stop(); go(idx - 1); });
   $("next").addEventListener("click", function () { stop(); go(idx + 1); });
@@ -1042,6 +1114,9 @@
   });
 
   document.addEventListener("keydown", function (e) {
+    if (e.key === "+" || e.key === "=") { setZoom(zoom + 0.1); return; }
+    if (e.key === "-" || e.key === "_") { setZoom(zoom - 0.1); return; }
+    if (e.key === "0") { zoomToFit(); return; }
     if (e.target.tagName === "INPUT") return;
     if (e.key === "ArrowLeft") { stop(); go(idx - 1); }
     else if (e.key === "ArrowRight") { stop(); go(idx + 1); }
