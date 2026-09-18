@@ -25,6 +25,20 @@ namespace cudaq::opt {
 
 using namespace mlir;
 
+static constexpr StringRef regionAttrName("region");
+
+/// The unmapped wire set a function borrows from. Wires are a per-region
+/// resource, so a function tagged `{region = @rN}` by `region-to-func` draws
+/// from that region's own set; an untagged function is the degenerate case of a
+/// single region holding every qubit, which is the one set named `wires`.
+static std::string unmappedWireSetNameFor(mlir::Operation *op) {
+  if (auto region = op->getAttrOfType<FlatSymbolRefAttr>(regionAttrName))
+    return (Twine(cudaq::opt::topologyAgnosticWiresetName) + "_" +
+            region.getValue())
+        .str();
+  return cudaq::opt::topologyAgnosticWiresetName;
+}
+
 namespace {
 class NullWirePat : public OpRewritePattern<cudaq::quake::NullWireOp> {
 public:
@@ -72,8 +86,12 @@ struct AssignWireIndicesPass
     func::FuncOp func = getOperation();
 
     // Only run on the entrypoint, the expectation is that inlining has been
-    // done already, so there should only be one kernel remaining.
-    if (!func->hasAttr(cudaq::entryPointAttrName))
+    // done already, so there should only be one kernel remaining. A region
+    // function is the exception: `region-to-func` split the kernel into one
+    // function per region, so each is an independent wire-allocation scope even
+    // though none of them is the entry point.
+    bool isRegionFunc = func->hasAttr(regionAttrName);
+    if (!isRegionFunc && !func->hasAttr(cudaq::entryPointAttrName))
       return;
 
     // Only bail out if there are calls to quantum kernels; non-quantum calls
@@ -115,8 +133,11 @@ struct AssignWireIndicesPass
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
     unsigned x = 0;
-    patterns.insert<NullWirePat>(ctx, &x,
-                                 cudaq::opt::topologyAgnosticWiresetName);
+    // Indices restart at 0 in each region, which is exactly what the mapper
+    // wants: it indexes the device by borrow identity, so a region's wires must
+    // be dense from zero within that region.
+    std::string wireSetName = unmappedWireSetNameFor(func);
+    patterns.insert<NullWirePat>(ctx, &x, wireSetName);
     patterns.insert<SinkOpPat>(ctx);
     ConversionTarget target(*ctx);
     target.addLegalDialect<cudaq::quake::QuakeDialect>();
@@ -136,10 +157,25 @@ struct AddWiresetPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     OpBuilder builder(mod.getBodyRegion());
-    auto wireSetOp = cudaq::quake::WireSetOp::create(
-        builder, builder.getUnknownLoc(),
-        cudaq::opt::topologyAgnosticWiresetName, INT_MAX, ElementsAttr{});
-    wireSetOp.setPrivate();
+
+    // Wires belong to a region. With regions declared, each gets its own
+    // unmapped set; with none, the whole kernel is the single implicit region
+    // and there is one set, named as it always has been.
+    SmallVector<std::string> names;
+    for (auto regionOp : mod.getOps<cudaq::quake::RegionOp>())
+      names.push_back((Twine(cudaq::opt::topologyAgnosticWiresetName) + "_" +
+                       regionOp.getSymName())
+                          .str());
+    if (names.empty())
+      names.push_back(cudaq::opt::topologyAgnosticWiresetName);
+
+    for (const auto &name : names) {
+      if (mod.lookupSymbol<cudaq::quake::WireSetOp>(name))
+        continue;
+      auto wireSetOp = cudaq::quake::WireSetOp::create(
+          builder, builder.getUnknownLoc(), name, INT_MAX, ElementsAttr{});
+      wireSetOp.setPrivate();
+    }
   }
 };
 

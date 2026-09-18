@@ -39,6 +39,16 @@ using namespace mlir;
 namespace {
 
 constexpr StringRef mappedWireSetName("mapped_wireset");
+constexpr StringRef regionAttrName("region");
+
+/// The mapped wire set a function draws from. A function tagged `{region = @rN}`
+/// by `region-to-func` gets its own, so each region is placed and routed against
+/// its own topology and keeps its own `mapping_v2p`.
+static std::string mappedWireSetNameFor(mlir::Operation *func) {
+  if (auto region = func->getAttrOfType<FlatSymbolRefAttr>(regionAttrName))
+    return (mappedWireSetName + "_" + region.getValue()).str();
+  return mappedWireSetName.str();
+}
 
 //===----------------------------------------------------------------------===//
 // Placement
@@ -2342,8 +2352,8 @@ struct MappingPrep : public cudaq::opt::impl::MappingPrepBase<MappingPrep> {
   }
 
   /// Create an adjacency matrix attribute for a WireSetOp.
-  SparseElementsAttr getAdjacencyFromDevice(cudaq::Device &d,
-                                            MLIRContext *ctx) {
+  static SparseElementsAttr getAdjacencyFromDevice(cudaq::Device &d,
+                                                   MLIRContext *ctx) {
     int numEdges = 0;
     unsigned int qubitCardinality = static_cast<unsigned int>(d.getNumQubits());
 
@@ -2392,6 +2402,22 @@ struct MappingPrep : public cudaq::opt::impl::MappingPrepBase<MappingPrep> {
     if (deviceBypass)
       return;
 
+    // Wires are a per-region resource. With regions declared, each gets a
+    // mapped wire set built from its own topology, so regions are placed and
+    // routed independently and never collide over one physical qubit pool.
+    // Each region carries its own device, so this path does not consult -- or
+    // need -- the pass-level `device` option at all.
+    auto regionOps = llvm::to_vector(mod.getOps<cudaq::quake::RegionOp>());
+    if (!regionOps.empty()) {
+      for (auto regionOp : regionOps)
+        if (failed(insertWireSetOpForRegion(regionOp, mod)))
+          return signalPassFailure();
+      return;
+    }
+
+    // No regions: the whole kernel is the single implicit region, and this is
+    // the one set the mapper has always produced.
+    //
     // A composable run tolerates an unset device (the default "-" or an
     // unparsable device option) as a no-op; `initialize` already fails a
     // non-composable run before it reaches here. Guard the deref regardless so
@@ -2400,6 +2426,42 @@ struct MappingPrep : public cudaq::opt::impl::MappingPrepBase<MappingPrep> {
       return;
 
     insertWireSetOpForDevice(*deviceInstance, mod);
+  }
+
+  /// Build the mapped wire set for one region from that region's own `device`
+  /// attribute. A region without one is all-to-all: there is nothing to route
+  /// around, so it gets no set and the mapper leaves its function alone.
+  LogicalResult insertWireSetOpForRegion(cudaq::quake::RegionOp regionOp,
+                                         ModuleOp mod) {
+    auto deviceString = regionOp.getDevice();
+    if (!deviceString)
+      return success();
+
+    std::string name = (mappedWireSetName + "_" + regionOp.getSymName()).str();
+    if (mod.lookupSymbol<cudaq::quake::WireSetOp>(name))
+      return success();
+
+    bool bypass = false;
+    std::optional<cudaq::Device> regionDevice;
+    if (llvm::Error error =
+            deviceFromString(*deviceString, bypass, regionDevice))
+      return regionOp.emitOpError(llvm::toString(std::move(error)));
+    if (bypass || !regionDevice)
+      return success();
+
+    if (regionDevice->getNumQubits() != regionOp.getNumWires())
+      return regionOp.emitOpError("device '")
+             << *deviceString << "' has " << regionDevice->getNumQubits()
+             << " qubits but the region declares " << regionOp.getNumWires()
+             << " wires";
+
+    auto adjacency = getAdjacencyFromDevice(*regionDevice, mod.getContext());
+    OpBuilder builder(mod.getBodyRegion());
+    auto wireSetOp = cudaq::quake::WireSetOp::create(
+        builder, regionOp.getLoc(), name, regionDevice->getNumQubits(),
+        adjacency);
+    wireSetOp.setPrivate();
+    return success();
   }
 };
 
@@ -2440,10 +2502,58 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
 
   bool deviceBypass = false;
   std::optional<cudaq::Device> deviceInstance;
+  /// Whether `deviceInstance` currently holds a region's device rather than the
+  /// one `initialize` built from the pass option.
+  bool deviceIsRegionSpecific = false;
 
   virtual LogicalResult initialize(MLIRContext *context) override {
     return initializeDevice(device, nonComposable, context, deviceBypass,
                             deviceInstance);
+  }
+
+  /// Rebuild `deviceInstance` for the function about to be mapped. A function
+  /// tagged `{region = @rN}` takes its topology from that `quake.region`'s
+  /// `device` attribute, so each region is routed against its own coupling
+  /// graph; anything else uses the pass option. This rebuilds unconditionally
+  /// because one nested pass instance is reused across functions, so a region's
+  /// device must not leak into the next function's mapping.
+  LogicalResult resolveDeviceFor(func::FuncOp func) {
+    auto regionAttr = func->getAttrOfType<FlatSymbolRefAttr>(regionAttrName);
+    if (!regionAttr) {
+      // Not a region function, so the pass option applies. Only rebuild if a
+      // region already overwrote it; otherwise `initialize`'s device stands and
+      // re-parsing would just repeat its diagnostics once per function.
+      if (!deviceIsRegionSpecific)
+        return success();
+      deviceIsRegionSpecific = false;
+      return rebuildDevice(device, func);
+    }
+
+    auto mod = func->getParentOfType<ModuleOp>();
+    auto regionOp =
+        mod.lookupSymbol<cudaq::quake::RegionOp>(regionAttr.getAttr());
+    if (!regionOp)
+      return func.emitOpError("assigned to undeclared region ")
+             << regionAttr.getValue();
+    deviceIsRegionSpecific = true;
+    // A region with no device is all-to-all: nothing to route around, so leave
+    // the device unset and the mapper bows out below.
+    auto regionDevice = regionOp.getDevice();
+    if (!regionDevice) {
+      deviceBypass = false;
+      deviceInstance.reset();
+      return success();
+    }
+    return rebuildDevice(*regionDevice, func);
+  }
+
+  LogicalResult rebuildDevice(StringRef deviceString, func::FuncOp func) {
+    deviceBypass = false;
+    deviceInstance.reset();
+    if (llvm::Error error =
+            deviceFromString(deviceString, deviceBypass, deviceInstance))
+      return func.emitOpError(llvm::toString(std::move(error)));
+    return success();
   }
 
   /// Add `op` and all of its users into `opsToMoveToEnd`. `op` may not be
@@ -2811,9 +2921,12 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
 
   void runOnOperation() override {
     auto func = getOperation();
+    if (failed(resolveDeviceFor(func)))
+      return signalPassFailure();
+    const std::string wireSetName = mappedWireSetNameFor(func);
     bool usesMappedWireSet =
-        func.walk<WalkOrder::PreOrder>([](cudaq::quake::BorrowWireOp borrowOp) {
-              return borrowOp.getSetName() == mappedWireSetName
+        func.walk<WalkOrder::PreOrder>([&](cudaq::quake::BorrowWireOp borrowOp) {
+              return borrowOp.getSetName() == wireSetName
                          ? WalkResult::interrupt()
                          : WalkResult::advance();
             })
@@ -2838,8 +2951,7 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
     //  * The kernel can only have one block
 
     auto mod = func->getParentOfType<ModuleOp>();
-    auto wireSetOp =
-        mod.lookupSymbol<cudaq::quake::WireSetOp>(mappedWireSetName);
+    auto wireSetOp = mod.lookupSymbol<cudaq::quake::WireSetOp>(wireSetName);
     if (!wireSetOp) {
       // Silently return without error if no mapped wire set is found in the
       // module.
@@ -3208,7 +3320,7 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
 
     // Make all existing borrow_wire ops use the mapped wire set.
     func.walk([&](cudaq::quake::BorrowWireOp borrowOp) {
-      borrowOp.setSetName(mappedWireSetName);
+      borrowOp.setSetName(wireSetName);
     });
 
     // We've made it past all the initial checks. Remove the returns now. They
@@ -3263,7 +3375,7 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
     for (unsigned i = 0; i < deviceInstance->getNumQubits(); i++) {
       if (!sources[i]) {
         auto borrowOp = cudaq::quake::BorrowWireOp::create(
-            builder, unknownLoc, wireTy, mappedWireSetName, i);
+            builder, unknownLoc, wireTy, wireSetName, i);
         wireToVirtualQ[borrowOp.getResult()] = cudaq::Placement::VirtualQ(i);
         sources[i] = borrowOp;
       }

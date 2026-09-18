@@ -2157,15 +2157,22 @@ def quake_RegionOp : QuakeOp<"region", [IsolatedFromAbove, Symbol]> {
     Subcircuits are scheduled onto regions and qubit movement between regions
     is made explicit with `quake.move`.
 
+    The optional `device` attribute gives the region's internal connectivity,
+    in the same grammar the mapper's `device` option accepts (`path(N)`,
+    `ring(N)`, `star(N)`, `grid(w,h)`, `file(...)`). A region without one is
+    all-to-all, so there is nothing for a mapper to route around.
+
     Example:
     ```mlir
       quake.region @r1[2]
+      quake.region @r2[9] attributes {device = "grid(3,3)"}
     ```
   }];
 
   let arguments = (ins
     StrAttr:$sym_name,
-    I32Attr:$num_wires
+    I32Attr:$num_wires,
+    OptionalAttr<StrAttr>:$device
   );
 
   let hasCustomAssemblyFormat = 1;

@@ -1616,6 +1616,9 @@ def IntroduceRegions : Pass<"introduce-regions", "mlir::ModuleOp"> {
       "Number of QPU regions to introduce.">,
     Option<"regionSize", "region-size", "unsigned", /*default=*/"2",
       "Number of compute wires per region.">,
+    Option<"device", "device", "std::string", /*default=*/"\"\"",
+      "Intra-region connectivity, in the mapper's device grammar, e.g. "
+      "grid(2,2). Empty leaves regions all-to-all.">,
   ];
 }
 
@@ -1628,6 +1631,22 @@ def AssignSubcircuitRegions : Pass<"assign-subcircuit-regions", "mlir::func::Fun
   }];
   let dependentDialects = ["cudaq::cc::CCDialect",
     "cudaq::quake::QuakeDialect"];
+}
+
+def RegionToFunc : Pass<"region-to-func", "mlir::ModuleOp"> {
+  let summary = "Outline region-tagged subcircuit lambdas into func.func ops.";
+  let description = [{
+    Rewrites each `cc.create_lambda` carrying a `{region = @rN}` attribute into
+    a private `func.func` with the same attribute, and its `cc.call_callable`
+    into a `func.call`. The body, including the entry `quake.move` ops added by
+    `add-region-moves`, moves across unchanged.
+
+    This exists so that the qubit mapper — which is a nested pass over
+    `func.func` and writes one `mapping_v2p` per function — can be run once per
+    region rather than once per kernel. Requires `add-region-moves` to have run.
+  }];
+  let dependentDialects = ["cudaq::cc::CCDialect", "cudaq::quake::QuakeDialect",
+    "mlir::func::FuncDialect"];
 }
 
 def AddRegionMoves : Pass<"add-region-moves", "mlir::func::FuncOp"> {
