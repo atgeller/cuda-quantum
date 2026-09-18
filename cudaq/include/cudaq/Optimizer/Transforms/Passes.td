@@ -1597,7 +1597,7 @@ def OutlinePartitions : Pass<"outline-partitions", "mlir::func::FuncOp"> {
     "cudaq::quake::QuakeDialect"];
   let options = [
     Option<"strategy", "strategy", "std::string", /*default=*/"\"greedy\"",
-      "Partitioning strategy: greedy.">,
+      "Partitioning strategy: greedy, greedy-pair.">,
     Option<"maxQubits", "max-qubits", "unsigned", /*default=*/"2",
       "Maximum qubit wire timelines per partition, passed to the strategy.">,
   ];

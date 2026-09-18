@@ -8,6 +8,7 @@
 
 #include "PassDetails.h"
 #include "cudaq/Optimizer/Analysis/GreedyOpPartitioner.h"
+#include "cudaq/Optimizer/Analysis/GreedyPairPartitioner.h"
 #include "cudaq/Optimizer/Dialect/CC/CCTypes.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeOps.h"
 #include "cudaq/Optimizer/Dialect/Quake/QuakeTypes.h"
@@ -208,6 +209,12 @@ public:
       return;
     if (strategy == "greedy") {
       cudaq::opt::GreedyOpPartitioner analysis(op, maxQubits);
+      if (failed(cudaq::opt::outlinePartitions(analysis.getPartitions())))
+        signalPassFailure();
+      return;
+    }
+    if (strategy == "greedy-pair") {
+      cudaq::opt::GreedyPairPartitioner analysis(op, maxQubits);
       if (failed(cudaq::opt::outlinePartitions(analysis.getPartitions())))
         signalPassFailure();
       return;

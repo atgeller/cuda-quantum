@@ -9,6 +9,7 @@
 add_cudaq_library(OptAnalysis
   CommutationAnalysis.cpp
   GreedyOpPartitioner.cpp
+  GreedyPairPartitioner.cpp
   QubitIdentityAnalysis.cpp
   UnitaryOpGrouping.cpp
 
