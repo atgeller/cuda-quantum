@@ -23,6 +23,11 @@ static bool isQubitValue(Value v) {
   return isa<cudaq::quake::WireType>(v.getType());
 }
 
+/// A release is bookkeeping, not a gate -- it never forms or extends a
+/// partition on its own. See flush() below for where it actually lands.
+static bool isRelease(Operation &op) {
+  return isa<cudaq::quake::ReturnWireOp, cudaq::quake::SinkOp>(op);
+}
 
 cudaq::opt::GreedyOpPartitioner::GreedyOpPartitioner(Operation *op,
                                                      unsigned maxQubits) {
@@ -50,6 +55,18 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
 
   // Saves a partition to results and removes it from the open list.
   auto flush = [&](Part *P) {
+    // A live wire whose only remaining use is a release finishes here rather
+    // than being evicted into a fresh, separately-placed partition -- that
+    // would cost a move just to reach a release that could run on the spot.
+    for (Value w : P->liveWires) {
+      auto it = w.getUsers().begin();
+      if (it == w.getUsers().end())
+        continue;
+      Operation *user = *it;
+      if (++it != w.getUsers().end() || !isRelease(*user))
+        continue;
+      P->ops.push_back(user);
+    }
     for (Value w : P->liveWires)
       wireOwner.erase(w);
     if (!P->ops.empty())
@@ -108,6 +125,9 @@ void cudaq::opt::GreedyOpPartitioner::partitionBlock(Block &block,
 
     // Reject ops that require more qubit timelines than the partition limit.
     if (qubitInputCount(&op) > maxQubits)
+      continue;
+
+    if (isRelease(op))
       continue;
 
     // A source starts a timeline; hold it for whoever uses the wire.

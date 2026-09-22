@@ -12,8 +12,8 @@ import pytest
 
 from cudaq_qpu_layout.model import QpuModel
 from cudaq_qpu_layout.sim import simulate, LayoutError
-from cudaq_qpu_layout.trace import (replay, COMPUTE, IN, OUT, CROSS,
-                                    PORT_IN, PORT_OUT)
+from cudaq_qpu_layout.trace import (replay, COMPUTE, IN, OUT, CROSS, PORT_IN,
+                                    PORT_OUT)
 
 PAYLOADS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "payloads")
 
@@ -151,8 +151,8 @@ def test_ops_reference_the_replayed_placement(trace):
 def test_summary_matches_steps(trace):
     moves = [m for s in trace["steps"] for m in s["moves"]]
     summary = trace["summary"]
-    assert summary["moves"]["cross"] == sum(1 for m in moves
-                                            if m["kind"] == CROSS)
+    assert summary["moves"]["cross"] == sum(
+        1 for m in moves if m["kind"] == CROSS)
     assert summary["moves"]["port"] == sum(
         1 for m in moves if m["kind"] in (PORT_IN, PORT_OUT))
     assert summary["total_move_ticks"] == sum(m["cost"] for m in moves)
@@ -201,7 +201,7 @@ def test_crossings_are_what_the_ir_asked_for():
     takes and charges a tick apiece.
     """
     trace = run("bell_cross.mlir", num_regions=2, region_size=3)
-    assert trace["summary"]["moves"] == {"cross": 3, "port": 6}
+    assert trace["summary"]["moves"] == {"cross": 2, "port": 4}
     # Every leg is one tick.
     assert trace["summary"]["total_move_ticks"] == \
         trace["summary"]["moves"]["cross"] + trace["summary"]["moves"]["port"]
@@ -231,8 +231,11 @@ def test_co_located_qubits_never_move():
     trace = run("line_chain.mlir", num_regions=1, region_size=4)
     for step in trace["steps"]:
         movers = {m["vq"] for m in step["moves"]}
-        acting = {q["vq"] for op in step["ops"]
-                  for q in op["controls"] + op["targets"]}
+        acting = {
+            q["vq"]
+            for op in step["ops"]
+            for q in op["controls"] + op["targets"]
+        }
         assert not (movers & acting), \
             f"a qubit moved and ran a gate in the same step: {movers & acting}"
 

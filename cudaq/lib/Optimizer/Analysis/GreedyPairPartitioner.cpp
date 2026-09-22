@@ -24,6 +24,12 @@ static bool isSource(Operation &op) {
   return isa<cudaq::quake::NullWireOp, cudaq::quake::BorrowWireOp>(op);
 }
 
+/// A release is bookkeeping, not a gate -- it never forms or extends a
+/// partition on its own. See flush() below for where it actually lands.
+static bool isRelease(Operation &op) {
+  return isa<cudaq::quake::ReturnWireOp, cudaq::quake::SinkOp>(op);
+}
+
 /// How many qubit timelines an op consumes. Two or more is an interaction.
 static unsigned qubitInputCount(Operation &op) {
   unsigned n = 0;
@@ -56,11 +62,24 @@ void cudaq::opt::GreedyPairPartitioner::partitionBlock(Block &block,
   // A timeline's ops that no partition has claimed yet, keyed by its current
   // wire value. Held until an interaction needs the qubit.
   DenseMap<Value, SmallVector<Operation *>> held;
-  // Chains that ended without producing a wire -- a measurement or a
-  // return_wire finishes the timeline, so nothing will extend them.
+  // Chains that ended without producing a wire -- a measurement finishes the
+  // timeline, so nothing will extend it. Releases never reach here; see
+  // isRelease().
   SmallVector<SmallVector<Operation *>> ended;
 
   auto flush = [&](Part *P) {
+    // A live wire whose only remaining use is a release finishes here rather
+    // than being evicted into a fresh, separately-placed partition -- that
+    // would cost a move just to reach a release that could run on the spot.
+    for (Value w : P->liveWires) {
+      auto it = w.getUsers().begin();
+      if (it == w.getUsers().end())
+        continue;
+      Operation *user = *it;
+      if (++it != w.getUsers().end() || !isRelease(*user))
+        continue;
+      P->ops.push_back(user);
+    }
     for (Value w : P->liveWires)
       owner.erase(w);
     if (!P->ops.empty())
@@ -101,6 +120,9 @@ void cudaq::opt::GreedyPairPartitioner::partitionBlock(Block &block,
     if (!hasQubits)
       continue;
     if (qubitInputCount(op) > maxQubits)
+      continue;
+
+    if (isRelease(op))
       continue;
 
     // A source starts a timeline; hold it for whoever first interacts with it.
@@ -184,8 +206,9 @@ void cudaq::opt::GreedyPairPartitioner::partitionBlock(Block &block,
           owner[w] = target;
         }
         target->qubitCount += other->qubitCount;
-        open.erase(std::find_if(open.begin(), open.end(),
-                                [other](const Part &x) { return &x == other; }));
+        open.erase(
+            std::find_if(open.begin(), open.end(),
+                         [other](const Part &x) { return &x == other; }));
       }
     } else {
       // Close only what has to close -- largest first -- and let the survivors
