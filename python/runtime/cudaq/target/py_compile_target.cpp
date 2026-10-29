@@ -186,6 +186,9 @@ void cudaq::bindCompileTarget(nanobind::module_ &mod) {
       .def_rw("support_sample_without_measurements",
               &CompileTarget::supportSampleWithoutMeasurements)
       .def_rw("fully_specialize", &CompileTarget::fullySpecialize)
+      .def_rw("needs_reorder_idx", &CompileTarget::needsReorderIdx)
+      .def_rw("needs_implicit_measurements",
+              &CompileTarget::needsImplicitMeasurements)
       .def_rw("disable_qubit_mapping", &CompileTarget::disableQubitMapping)
       .def(nanobind::self == nanobind::self)
       .def("__hash__", std::hash<CompileTarget>())
